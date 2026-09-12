@@ -1,0 +1,6 @@
+dist/
+.certs/
+.claude/
+node_modules/
+.mcp.jsonbench/
+bench/
