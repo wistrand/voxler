@@ -55,7 +55,11 @@ coarse levels, marched level by level in compute at half resolution behind a bea
 pre-pass, and composited behind the near field, which wins every pixel it drew (depth)
 and every chunk it is drawing (a coverage mask). The march costs 0.59 ms p50 at 1080p
 over the flyover bench. It is on by default (`?far=0` turns it off) and stays a plan
-file rather than an architecture doc for now. Its clipmap is also what shadow rays
+file rather than an architecture doc for now. How far it reaches is not a constant: a
+controller watches what the march and the brick sampling actually cost on this machine
+and moves the slab budget, the level count and the march resolution, in that order, to
+fit whatever the display's frame period has left once every other pass is paid
+(`src/far/adapt.ts`). Its clipmap is also what shadow rays
 march ([plan-living-world.md](agent_docs/plan-living-world.md) phase 5), so turning the
 far field off turns shadows off with it.
 The living world is done: emissive blocks, wind in the vertex stage, the forest world
@@ -110,7 +114,7 @@ today `src/gpu/`, `src/render/`, `src/camera/`, `src/util/`, `src/debug/`,
 | `src/brush/`     | brush records and op lists, the CPU and WGSL field folds, the voxel stage, the instance store, the edit tool |
 | `src/mesh/`      | binary greedy mesher, reference mesher, clusters, baked AO and block light, mesh job (worker-side, pure) |
 | `src/render/`    | arenas, cull and draw passes, Hi-Z, shading, sky presets, block textures |
-| `src/far/`       | brick builder, clipmaps, far-field march and composite, shadow rays |
+| `src/far/`       | brick builder, clipmaps, far-field march and composite, shadow rays, the adaptive reach |
 | `src/workers/`   | `WorkerPool`, job queue, buffer pool, the worker, job handlers |
 | `src/util/`      | math, ring buffers, timers                                     |
 | `src/debug/`     | overlay (caps, stats, camera, errors) and frame `Stats`        |
@@ -181,14 +185,21 @@ light and `?shadow=0` stops marching shadow rays; `?sky=<day|night>` overrides t
 world's own sky and lighting preset (`src/render/sky.ts`); `?far=0` turns the far
 field off (it is on by default) and `?far=steps|bricks|levels` picks a debug view
 (F queues every clipmap level again);
-`?farLevels=n` sets the level count, `?farFirst=k` the finest level's cell size
-(2^k voxels), `?farBricks=n` the brick pool capacity, `?farSlabs=n` the brick slabs
-sampled per frame, `?farScale=0.1..1` the march resolution as a fraction of the frame
-and `?farBeam=0` turns the beam pre-pass off; `?farCheck` compares the sampled bricks
+`?farLevels=n` sets how many levels are allocated (and so the most the clipmap can
+reach), `?farFirst=k` the finest level's cell size (2^k voxels), `?farBricks=n` the
+brick pool capacity, `?farSlabs=n` the brick slabs sampled per frame to start from,
+`?farScale=0.1..1` the march resolution as a fraction of the frame (1 by default; below
+it a terrace's top face is thinner than the sampling and distant contour lines break up)
+and `?farBeam=0` turns the beam pre-pass off; `?farAdapt=0` stops the far field moving its own reach and
+slab budget and march resolution to fit what is left of the frame after every other pass
+(`src/far/adapt.ts`),
+which it otherwise does on every machine except during a bench run; `?farCheck` compares the sampled bricks
 against the same region reduced from resident chunk data; `?preview=1`
 forces the SDF preview on (it starts off while meshes are drawn, and its pipelines are
 built the first time it is switched on, not at startup). Look by dragging
-(mouse or touch); the wheel flies forward and back, and +/- change the speed. Keys:
+(mouse or touch); the wheel flies towards and away from whatever the cursor is over
+(not along the view: a thing can be approached without turning to face it), and +/-
+change the speed. Keys:
 F2 overlay,
 P SDF preview, G grid, M meshes, F rebuild far-field bricks; editing: E place, Q remove, R rotate (Shift+R the
 other way), B block, X shape, Z undo, Y redo, aimed by the camera ray (overlay `edit`
@@ -279,6 +290,9 @@ near the camera that should be resident but weren't (0 means streaming kept up).
   `?far=0` turns them off with it, and nothing outside the clipmap's window casts one.
 - A change presented as a performance improvement includes before and after numbers
   from the bench harness.
+- Anything that adapts to measured cost is off during a bench run. A setting that moves
+  under the measurement makes two results incomparable, which is worse than the setting
+  being wrong.
 
 ## Target platforms
 
@@ -336,6 +350,10 @@ away here:
   written in-repo to keep control of allocation and bundle size.
 - WGSL shaders are `.wgsl` files imported with `with { type: "text" }`. Every GPU
   object gets a `label`.
+- Whatever `apply_fog()` mixes toward must be continuous and smooth in the view
+  direction. It is not only the sky: it is part of the shade of every fogged voxel, so a
+  step in it is a line drawn across the frame
+  ([gotchas.md](agent_docs/gotchas.md) "A step in the sky's colour").
 - Surfaces are lit and fogged by `surface_light()` (or `surface_light_shadowed()`,
   which is the same light with the direct term scaled) and `apply_fog()` in
   `src/render/shading.wgsl`, over constants a world's sky preset generates
@@ -358,6 +376,9 @@ away here:
 - Tests are `*_test.ts` and benchmarks `*_bench.ts`, next to the code they cover.
 - Never use pointer lock. Camera look is drag-to-look with pointer capture, and the
   overlay receives pointer events so its text can be selected and copied.
+- Take a pointer's position from `clientX`/`clientY` against `getBoundingClientRect()`,
+  never from `offsetX`/`offsetY`: the two disagree under browser zoom
+  ([gotchas.md](agent_docs/gotchas.md) "`offsetX` on a pointer event").
 - Key bindings match `KeyboardEvent.code` (physical position) so WASD works on any
   layout. Keys shown by label in help text must have the same label everywhere
   (letters, Space, Shift, F-keys); never bind punctuation keys like Backquote by code.

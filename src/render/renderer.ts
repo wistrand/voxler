@@ -14,6 +14,9 @@ import type { Gpu } from "../gpu/device.ts";
 import { compileShader, createRenderPipeline, type Report, type ShaderSource } from "../gpu/shader.ts";
 import { GpuTimer } from "../gpu/timer.ts";
 import { FarField, type FarFieldOptions } from "../far/far-field.ts";
+import { farBudgetMs, type FarAdapt, refreshFromIntervals } from "../far/adapt.ts";
+import { newSummary, percentileOfSorted, summarize } from "../util/percentile.ts";
+import { RingBuffer } from "../util/ring.ts";
 import { buildTextures } from "./textures.ts";
 import { SdfPreview } from "../sdf/preview.ts";
 import { Voxelizer } from "../sdf/voxelizer.ts";
@@ -33,6 +36,10 @@ const GIZMO_MARGIN_CSS_PX = 12;
 // what one field alone would (plan-far-field phase 3).
 const UPLOAD_BYTES_PER_FRAME = 4 << 20;
 const CULL_CHECK_INTERVAL = 30; // frames between cull checks (?cullCheck)
+// Frames of interval history before the display's period is worth reading, and where in
+// that history to read it (see refreshFromIntervals: the short end, not the middle).
+const MIN_INTERVAL_SAMPLES = 30;
+const INTERVAL_Q = 0.1;
 
 const CAMERA_SOURCE: ShaderSource = { name: "camera.wgsl", code: cameraWgsl };
 
@@ -109,6 +116,15 @@ export class Renderer {
   // Milliseconds each init stage took, for the overlay's startup line. Shader
   // compilation for a heavy world dominates it.
   readonly startup: Record<string, number> = {};
+  // Null when adaptation is off (`?farAdapt=0`, and during a bench run, where a reach
+  // that moves under the measurement makes the numbers incomparable).
+  farAdapt: FarAdapt | null = null;
+  private readonly farScratch = new Float64Array(STATS_WINDOW);
+  private readonly farSummary = newSummary();
+  // Intervals between the frames this renderer drew, for the display's period. Its own
+  // ring rather than the overlay's: the overlay is optional and this is not.
+  private readonly frameIntervals = new RingBuffer(STATS_WINDOW);
+  private lastFrameAt = 0;
   // Compare culled and unculled near-field draws every CULL_CHECK_INTERVAL frames.
   cullCheck = false;
   // Seconds on the animation clock, set by the caller each frame. Held here rather than
@@ -344,6 +360,46 @@ export class Renderer {
     return this.preview.ready;
   }
 
+  // Feeds the adaptive controller the far field's own GPU time and applies what it
+  // decides. Reads the timer's rings rather than its `onSample` hook, which the bench
+  // session owns; the summaries only run when a window closes, not per frame.
+  private adaptFar(): void {
+    const adapt = this.farAdapt;
+    if (adapt === null || !this.timer.enabled) return;
+    const now = performance.now();
+    if (this.lastFrameAt > 0) this.frameIntervals.push(now - this.lastFrameAt);
+    this.lastFrameAt = now;
+    const march = summarize(this.timer.rings[PASS_FAR], this.farScratch, this.farSummary).mean;
+    const beam = summarize(this.timer.rings[PASS_FAR_BEAM], this.farScratch, this.farSummary).mean;
+    summarize(this.timer.rings[PASS_FAR_BUILD], this.farScratch, this.farSummary);
+    const build = this.farSummary.mean, buildMax = this.farSummary.max;
+    // The beam is part of what marching costs, so it goes on the march's side.
+    const marchTotal = march + (Number.isFinite(beam) ? beam : 0);
+    const budget = this.farBudget();
+    if (!adapt.frame(budget, marchTotal, build, buildMax, this.far.stats.queued, this.far.builtLastFrame)) {
+      return;
+    }
+    this.far.levels = adapt.settings.levels;
+    this.far.slabs = adapt.settings.slabsPerFrame;
+    this.far.resolutionScale = adapt.settings.scale;
+  }
+
+  // What is left of a frame for the far field: the display's period, from the short end
+  // of the observed intervals, less what every other timed pass costs. NaN until there
+  // is enough of both to mean anything, which leaves the controller on its fallback.
+  private farBudget(): number {
+    const intervals = summarize(this.frameIntervals, this.farScratch, this.farSummary);
+    if (intervals.count < MIN_INTERVAL_SAMPLES) return NaN;
+    const refresh = refreshFromIntervals(percentileOfSorted(this.farScratch, intervals.count, INTERVAL_Q));
+    let other = 0;
+    for (let p = 0; p < TIMED_PASSES.length; p++) {
+      if (p === PASS_FAR || p === PASS_FAR_BUILD || p === PASS_FAR_BEAM) continue;
+      const mean = summarize(this.timer.rings[p], this.farScratch, this.farSummary).mean;
+      if (Number.isFinite(mean)) other += mean;
+    }
+    return farBudgetMs(refresh, other, this.farAdapt!.options);
+  }
+
   // Called when the canvas size changes. Not per frame: allocates the depth target.
   resize(width: number, height: number): void {
     if (width === this.width && height === this.height && this.depthTexture) return;
@@ -434,6 +490,8 @@ export class Renderer {
     // the pixels the raster pass already covered, and before the main pass, which
     // blits it behind them.
     if (this.showFar) {
+      // Reach and build budget follow what the far field is costing on this machine.
+      this.adaptFar();
       // Follow the camera and sample the slabs that scrolled in, budgeted per frame by
       // FarField so a clipmap that has to catch up never lands on one frame.
       this.far.updateBrushes(camera.chunk[0], camera.chunk[1], camera.chunk[2]);

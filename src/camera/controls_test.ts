@@ -1,4 +1,5 @@
 import { stepSpeed, wheelDolly } from "./controls.ts";
+import { FlyCamera } from "./camera.ts";
 
 function assert(cond: boolean, what: string): void {
   if (!cond) throw new Error(what);
@@ -44,4 +45,25 @@ Deno.test("+ and - step the speed and keep it in range", () => {
   assert(stepSpeed(0.5, 1 / 1.25) === 0.5, "the speed went below the floor");
   assert(stepSpeed(20000, 1.25) === 20000, "the speed went above the ceiling");
   assert(stepSpeed(20, NaN) === 20, "a broken factor changed the speed");
+});
+
+Deno.test("the wheel step is a distance, and aiming it does not change how far it goes", () => {
+  // FlyControls needs a canvas, so this covers the two halves it composes: wheelDolly
+  // gives the distance and FlyCamera.rayThrough gives the direction. The class
+  // multiplies them, so a step away from the centre has to be the same length as one
+  // through it, or the wheel would fly further towards a corner than straight ahead.
+  const cam = new FlyCamera();
+  cam.setOrientation(0.8, -0.3);
+  const step = wheelDolly(20, -100);
+  const dir = new Float64Array(3);
+  for (const [x, y] of [[0, 0], [-1, 1], [1, -1], [0.4, 0.9]]) {
+    cam.rayThrough(x, y, 16 / 9, dir);
+    const len = Math.hypot(dir[0] * step, dir[1] * step, dir[2] * step);
+    assert(Math.abs(len - step) < 1e-9, `aiming at (${x}, ${y}) moved ${len}, not ${step}`);
+  }
+  // The centre of the viewport is the view, so aiming there is the old behaviour.
+  cam.rayThrough(0, 0, 16 / 9, dir);
+  for (let a = 0; a < 3; a++) {
+    assert(Math.abs(dir[a] - cam.basis[6 + a]) < 1e-12, `the centre ray is not the view, axis ${a}`);
+  }
 });

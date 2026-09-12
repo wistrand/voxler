@@ -27,7 +27,7 @@ const OTHER: readonly (readonly [number, number])[] = [[1, 2], [0, 2], [0, 1]];
 
 export interface ClipmapOptions {
   size: number; // B: bricks per side of every level, a power of two
-  levels: number; // L
+  levels: number; // L: how many levels are allocated, and the most that can be active
   firstLevel: number; // k of the finest level
   bricks: number; // pool capacity in slots
 }
@@ -88,6 +88,10 @@ export class Clipmap {
   // Slabs being built, 3 entries each. Small (the ring bounds it), and testing
   // against it beats scanning a slab's B^2 pending flags for every queued candidate.
   private readonly flight: number[] = [];
+  // 1 for a level that has just been switched on and holds nothing yet, so update()
+  // rebuilds it rather than scrolling into stale emptiness.
+  private readonly needsRebuild: Uint8Array;
+  private active: number;
   private readonly target = new Int32Array(3);
   private readonly from = new Int32Array(3);
   private readonly brick = new Int32Array(3);
@@ -105,10 +109,48 @@ export class Clipmap {
     this.pending = new Uint8Array(levels * this.cells);
     // A full rebuild of every level is L * B slabs; leave room for scrolling on top.
     this.queue = new Int32Array(levels * size * 3 * 4);
+    this.needsRebuild = new Uint8Array(levels);
+    this.active = levels;
   }
 
+  // Levels the march reads. Everything is allocated for `levelCapacity`, so this moves
+  // without touching a buffer; `setLevels` is what the adaptive controller turns
+  // (src/far/adapt.ts).
   get levels(): number {
+    return this.active;
+  }
+
+  get levelCapacity(): number {
     return this.options.levels;
+  }
+
+  // Changes how far the clipmap reaches. Levels that go away give their pool slots back
+  // and read as empty; levels that come back are rebuilt from nothing, because their
+  // entries were zeroed and their origin is wherever the camera was when they left.
+  // Returns true when the count actually changed.
+  setLevels(n: number): boolean {
+    const want = Math.min(this.options.levels, Math.max(1, n | 0));
+    if (want === this.active) return false;
+    if (want < this.active) {
+      for (let level = want; level < this.active; level++) this.retireLevel(level);
+    } else {
+      for (let level = this.active; level < want; level++) this.needsRebuild[level] = 1;
+    }
+    this.active = want;
+    return true;
+  }
+
+  // Drops everything a level holds without queueing it again: the level is leaving.
+  private retireLevel(level: number): void {
+    const base = level * this.cells;
+    for (let i = 0; i < this.cells; i++) {
+      const slot = entrySlot(this.entries[base + i]);
+      if (slot >= 0 && this.pending[base + i] === 0) this.pool.give(slot);
+      this.entries[base + i] = 0;
+    }
+    this.dropQueued(level);
+    this.dropCoarse(level);
+    if (!this.zeroed.includes(level)) this.zeroed.push(level);
   }
 
   get queued(): number {
@@ -158,7 +200,8 @@ export class Clipmap {
     for (let level = 0; level < this.levels; level++) {
       const b = this.brickVoxels(level);
       const o = level * 3;
-      let jumped = !this.centred;
+      let jumped = !this.centred || this.needsRebuild[level] !== 0;
+      this.needsRebuild[level] = 0;
       for (let a = 0; a < 3; a++) {
         target[a] = Math.floor((a === 0 ? x : a === 1 ? y : z) / b) - half;
         if (Math.abs(target[a] - this.origins[o + a]) >= size) jumped = true;
@@ -197,6 +240,13 @@ export class Clipmap {
     this.dropQueued(level);
     const o = level * 3;
     for (let p = 0; p < size; p++) this.enqueue(level, 2, this.origins[o + 2] + p, false);
+  }
+
+  // Coarse rebuilds waiting on a level that is going away.
+  private dropCoarse(level: number): void {
+    for (let i = this.coarse.length - 4; i >= 0; i -= 4) {
+      if (this.coarse[i] >= level) this.coarse.splice(i, 4);
+    }
   }
 
   private dropQueued(level: number): void {

@@ -188,3 +188,42 @@ Deno.test("a brick outside a coarser level's window is not queued for it", () =>
   map.queueCoarse(0, o[0], o[1], o[2]);
   assert(map.coarseQueued <= 1, `${map.coarseQueued} queued with only two levels`);
 });
+
+Deno.test("levels shrink and grow without leaking pool slots", () => {
+  const map = new Clipmap(OPTIONS);
+  const all = () => true;
+  map.update(0, 0, 0);
+  drain(map, all);
+  const full = map.pool.used;
+  assert(full > 0, "the full stack should hold bricks");
+  assert(map.levels === OPTIONS.levels, "starts at capacity");
+  const dropped = new Int32Array(8);
+  map.takeZeroed(dropped); // the first build zeroes every level; start from clean
+
+  // Dropping a level gives its bricks back and leaves nothing of it behind.
+  map.setLevels(2);
+  assert(map.levels === 2, `levels ${map.levels} after shrinking to 2`);
+  assert(map.pool.used < full, `pool stayed at ${map.pool.used} of ${full} after a level left`);
+  const zeroed = map.takeZeroed(dropped);
+  assert(zeroed === 1 && dropped[0] === 2, `expected level 2 zeroed, got ${zeroed} levels`);
+  map.update(0, 0, 0);
+  assert(map.queued === 0, "a retired level should queue nothing");
+
+  // Bringing it back rebuilds it from nothing rather than scrolling into the emptiness
+  // the retire left, so the whole level is queued again.
+  map.setLevels(3);
+  map.update(0, 0, 0);
+  assert(map.queued === OPTIONS.size, `expected ${OPTIONS.size} slabs for the new level, got ${map.queued}`);
+  drain(map, all);
+  assert(map.pool.used === full, `pool ${map.pool.used} did not come back to ${full}`);
+});
+
+Deno.test("setLevels clamps to the allocated capacity and reports whether it moved", () => {
+  const map = new Clipmap(OPTIONS);
+  assert(map.levelCapacity === OPTIONS.levels, "capacity is what was allocated");
+  assert(!map.setLevels(OPTIONS.levels), "setting the count it already has is not a change");
+  assert(map.setLevels(99) === false, "past capacity is the count it already has");
+  assert(map.levels === OPTIONS.levels, "never over capacity");
+  assert(map.setLevels(0), "zero is a change");
+  assert(map.levels === 1, "never under one level");
+});

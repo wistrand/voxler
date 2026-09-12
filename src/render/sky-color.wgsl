@@ -30,9 +30,30 @@ fn star_light(dir: vec3f) -> f32 {
   return STARS * bright * smoothstep(0.30, 0.0, d) * smoothstep(0.0, 0.35, dir.y);
 }
 
+// How far from the horizon a direction is, 0 at the horizon and 1 straight up or down,
+// as the gradient reads it. Two things it has to be, and the naive version is neither.
+//
+// It has to meet itself at the horizon, because this colour is not only the sky:
+// apply_fog() mixes every distant surface toward it, so a step here is a horizontal line
+// drawn across the whole frame, over voxels, with no horizon in sight. The halves used
+// to start at SKY_HORIZON above and SKY_HORIZON * 0.55 below, a 45% jump between two
+// voxels a pixel apart.
+//
+// And it has to meet itself *smoothly*. A plain square root is continuous at 0 but with
+// an infinite slope on both sides, which turns the step into a cusp: a thinner line, but
+// still a line. Easing the square root out over the first few degrees flattens it where
+// the halves meet and leaves the thin horizon band the gradient wants everywhere else.
+const HORIZON_SOFT: f32 = 0.06; // about three degrees
+
+fn sky_lift(y: f32) -> f32 {
+  let a = clamp(abs(y), 0.0, 1.0);
+  return sqrt(a) * smoothstep(0.0, HORIZON_SOFT, a);
+}
+
 fn sky_color(dir: vec3f) -> vec3f {
-  let sky = mix(SKY_HORIZON, SKY_ZENITH, sqrt(max(dir.y, 0.0)));
-  let ground = mix(SKY_HORIZON * 0.55, SKY_GROUND, sqrt(max(-dir.y, 0.0)));
+  let lift = sky_lift(dir.y);
+  let sky = mix(SKY_HORIZON, SKY_ZENITH, lift);
+  let ground = mix(SKY_HORIZON, SKY_GROUND, lift);
   var color = select(ground, sky, dir.y >= 0.0);
   color += vec3f(star_light(dir));
   // The light's own disc and the glow around it, scaled by DISC: 0 draws neither, which

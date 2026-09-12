@@ -1,9 +1,11 @@
 // Fly controls. Look: drag on the canvas with the mouse or a finger. No pointer
 // lock, so the cursor stays free for the overlay and the rest of the page. Keys:
 // WASD move along the view, Space/C move up/down in world space, Shift sprints,
-// + and - change the base speed. The wheel flies forward and back along the view, a
-// step of a fraction of a second's travel, so it stays useful at any speed. Events
-// only record state; update() applies it once per frame.
+// + and - change the base speed. The wheel flies towards and away from whatever the
+// cursor is over, a step of a fraction of a second's travel, so it stays useful at any
+// speed; aiming with the cursor rather than the view means a thing can be approached
+// without turning to face it first. Events only record state; update() applies it once
+// per frame.
 
 import type { FlyCamera } from "./camera.ts";
 
@@ -26,7 +28,8 @@ const MAX_NOTCHES = 4;
 
 // Voxels to fly for one wheel event: a slice of a second's travel at the current speed,
 // so the same gesture crosses a room in a cave and a valley from the air. Positive is
-// forward, which is a wheel pushed up (a negative deltaY). Pure; the class applies it.
+// towards what the cursor is over, which is a wheel pushed up (a negative deltaY).
+// Pure; the class applies it along the ray through the cursor.
 export function wheelDolly(speed: number, deltaY: number, deltaMode = 0): number {
   if (!Number.isFinite(deltaY) || deltaY === 0) return 0;
   const px = deltaMode === 1 ? deltaY * LINE_PX : deltaMode === 2 ? deltaY * PAGE_PX : deltaY;
@@ -58,7 +61,11 @@ export class FlyControls {
   private dragX = 0;
   private dragY = 0;
   private dragRate = 0;
-  private dolly = 0; // voxels along the view, from the wheel, applied next update
+  // Voxels to fly from the wheel, as a vector rather than a distance: the wheel flies
+  // towards whatever the cursor is over, not along the view, so two events at different
+  // cursor positions are two different directions and have to add as vectors.
+  private readonly dolly = new Float64Array(3);
+  private readonly dollyDir = new Float64Array(3);
 
   constructor(canvas: HTMLCanvasElement, camera: FlyCamera) {
     this.canvas = canvas;
@@ -80,11 +87,13 @@ export class FlyControls {
       this.lookX = 0;
       this.lookY = 0;
     }
-    const b0 = cam.basis;
-    if (this.dolly !== 0) {
+    const d = this.dolly;
+    if (d[0] !== 0 || d[1] !== 0 || d[2] !== 0) {
       // A wheel step is a distance, not a rate: it does not scale with the frame.
-      cam.translate(b0[6] * this.dolly, b0[7] * this.dolly, b0[8] * this.dolly);
-      this.dolly = 0;
+      cam.translate(d[0], d[1], d[2]);
+      d[0] = 0;
+      d[1] = 0;
+      d[2] = 0;
     }
     const f = (this.forward ? 1 : 0) - (this.back ? 1 : 0);
     const r = (this.right ? 1 : 0) - (this.left ? 1 : 0);
@@ -180,6 +189,23 @@ export class FlyControls {
   }
 
   private onWheel(e: WheelEvent): void {
-    this.dolly += wheelDolly(this.speed, e.deltaY, e.deltaMode);
+    const amount = wheelDolly(this.speed, e.deltaY, e.deltaMode);
+    if (amount === 0) return;
+    // Where the cursor is, as NDC over the canvas as it is displayed. The rect and
+    // `clientX`/`clientY` are in the same space whatever the page zoom is, which
+    // `offsetX` is not: under browser zoom Chrome reports it scaled, so the centre of
+    // the canvas came out a fifth of the way towards a corner. Allocating a DOMRect is
+    // fine here; a wheel event is a gesture, not the frame path.
+    const rect = this.canvas.getBoundingClientRect();
+    // The aspect comes from the render target, not the rect, because that is what the
+    // projection used: when `?size=` makes the two disagree the image is stretched, and
+    // the ray through a pixel has to be stretched with it.
+    const aspect = this.canvas.height > 0 ? this.canvas.width / this.canvas.height : 1;
+    const ndcX = rect.width > 0 ? ((e.clientX - rect.left) / rect.width) * 2 - 1 : 0;
+    const ndcY = rect.height > 0 ? 1 - ((e.clientY - rect.top) / rect.height) * 2 : 0;
+    const dir = this.camera.rayThrough(ndcX, ndcY, aspect, this.dollyDir);
+    this.dolly[0] += dir[0] * amount;
+    this.dolly[1] += dir[1] * amount;
+    this.dolly[2] += dir[2] * amount;
   }
 }

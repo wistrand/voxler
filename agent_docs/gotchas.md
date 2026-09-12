@@ -354,3 +354,90 @@ Diagnosed bugs, as symptom, diagnosis, fix, takeaway. None diagnosed yet.
   the same scene misses about 100 frames of 1400.
 - **Takeaway:** after changing a world's terrain, check its spawn and its bench scenes
   before trusting a number from them. A suspiciously good result is a result to check.
+
+### A GPU pass that stops running keeps its last timing forever
+
+- **Symptom:** the adaptive far-field controller walked the clipmap from eight levels
+  down to three while the march it was supposedly paying for cost 0.2 ms, and kept
+  reporting a 3.34 ms build that never changed by a hundredth between windows.
+- **Diagnosis:** `timer.passWrites(i)` is called only on the frames a pass is actually
+  encoded, which is the documented rule (a skipped pass is simply not timed). The other
+  side of that rule is that the pass's ring keeps whatever it last held, with no way to
+  tell "expensive" from "not running". The far field's brick build stops entirely once
+  the clipmap has caught up, so its ring froze at the cost of the initial fill and the
+  controller kept giving up reach to pay for work that had finished.
+- **Fix:** the far field reports whether it encoded a build each frame, and the
+  controller counts those frames and scales the ring's mean by the duty cycle. A window
+  with no build frames costs zero, whatever the ring says.
+- **Takeaway:** a value read from a pass ring is "what it costs when it runs", not "what
+  it costs a frame". Anything that budgets against it needs to know how often it runs,
+  and the rings cannot say.
+
+### A step in the sky's colour is a line drawn across every voxel
+
+- **Symptom:** a horizontal band edge across the frame at eye level, with voxels above it
+  a different shade from voxels below, and no horizon anywhere in sight. Reported as
+  "the horizon line somehow affects color of voxel even when horizon is not visible".
+- **Diagnosis:** `sky_color()` is not only the sky. `apply_fog()` mixes every distant
+  surface toward it, so its value along the view direction is part of the shade of every
+  fogged voxel. It read `SKY_HORIZON` above `dir.y = 0` and `SKY_HORIZON * 0.55` below,
+  a 45% jump in the fog target between two voxels a pixel apart. Measured as a +14.8
+  luminance step over two rows of a 1080p frame, flat on either side.
+- **Fix:** both halves start at `SKY_HORIZON` and ramp away from it, and the square root
+  that shapes the gradient is eased out over the first few degrees. A plain square root
+  meets continuously but with an infinite slope on both sides, which turns the step into
+  a cusp: a thinner line, still a line.
+- **Takeaway:** anything `apply_fog()` mixes toward has to be continuous *and* smooth in
+  the view direction, or it is a feature drawn on the geometry rather than behind it.
+  When a shading artifact tracks the camera's orientation instead of the world, look at
+  what the shading reads from the direction.
+
+### Half-resolution marching eats the thin face
+
+- **Symptom:** distant terraced terrain draws ragged contour lines. A terrace's top face
+  appears doubled, broken into dashes, or bleeding into the rows beside it, worst where
+  the top is a very different colour from the side facing the camera.
+- **Diagnosis:** the far field marched at half resolution. Terrain is terraced, and seen
+  from anywhere but straight down a terrace's top face is foreshortened to one or two
+  screen pixels, which is half a texel at half resolution: runs of it fall between
+  samples entirely, and the bilinear upsample then smears whatever was sampled across two
+  screen pixels. Not a filtering problem, an undersampling one; a sharper upsample would
+  not recover a face that was never marched.
+- **Fix:** full resolution by default, paid for by the adaptive controller giving up
+  clipmap levels that fog has already taken (plan-far-field.md "How far to reach").
+- **Takeaway:** a resolution scale is a sampling decision, so measure it against the
+  thinnest feature in the scene, not against GPU time alone. The table that justified
+  half resolution measured only the time.
+
+### `?mesh=0` turns the SDF preview on, which is a different renderer
+
+- **Symptom:** an hour of diagnosing a far-field artifact against images the far field
+  never drew. The debug views (`?far=steps`, `?far=levels`) appeared broken, because the
+  frame was not coming from the far field at all.
+- **Diagnosis:** the preview starts on whenever meshes are not being drawn
+  (`meshesByDefault` in `src/main.ts`), which is the sensible default for looking at a
+  world, and a trap when `?mesh=0` was meant to isolate the far field. The two look
+  similar at a glance: both are the same world, lit by the same functions.
+- **Fix, when isolating the far field:** `?mesh=0&preview=0`. Check
+  `voxler.renderer.showPreview` is false before trusting the picture, and check a debug
+  view actually changes the colours before concluding it is broken.
+- **Takeaway:** when a debug view does nothing, suspect that the thing being debugged is
+  not the thing on screen.
+
+### `offsetX` on a pointer event is not `clientX` minus the element
+
+- **Symptom:** the wheel-to-cursor fly aimed a fifth of the way towards the top-left
+  corner when the cursor was dead centre on the canvas. Every other position was off by
+  the same constant fraction.
+- **Diagnosis:** the handler read `e.offsetX` / `e.offsetY`, which are documented as the
+  position relative to the target's padding edge. Under browser zoom Chrome reports them
+  scaled by the zoom factor while `clientX` / `clientY` and `getBoundingClientRect()` stay
+  in CSS pixels: dispatching at `clientX` 715 over a canvas whose rect starts at 0 gave
+  `offsetX` 572, a factor of 0.8.
+- **Fix:** `clientX - rect.left` over `rect.width`, from `getBoundingClientRect()`. The
+  rect and the client coordinates are the same space whatever the zoom. Allocating a
+  DOMRect is fine in a gesture handler; the no-allocation invariant is about the frame
+  path.
+- **Takeaway:** pick one coordinate space for a pointer and stay in it. Mixing `offset*`
+  with `client*` or with a measured rect is a bug that only appears on a zoomed page,
+  which is not the machine it will be written on.

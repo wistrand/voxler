@@ -26,6 +26,7 @@ import { BRICK_CELLS, BrickGrid } from "./far/bricks.ts";
 import { DEFAULT_CLIPMAP_OPTIONS, MAX_LEVELS } from "./far/clipmap.ts";
 import { DEFAULT_FAR_SCALE } from "./far/far-field.ts";
 import { BRICK_JOB, FarEdits } from "./far/edits.ts";
+import { DEFAULT_ADAPT_OPTIONS, FarAdapt } from "./far/adapt.ts";
 import type { BrickJobOutput } from "./far/brick-job.ts";
 import { canShareMemory } from "./workers/buffers.ts";
 import { BLOCKS } from "./world/blocks.ts";
@@ -80,7 +81,7 @@ const VOXEL_BATCHES_PER_FRAME = 2; // normal budget; ?voxelBench uses every free
 const DEFAULT_VOXEL_SLOTS = 8;
 
 const CONTROLS_HELP = "drag: look (mouse or touch)  WASD move  Space/C up/down  Shift sprint\n" +
-  "wheel: fly forward/back  +/- speed\n" +
+  "wheel: fly to and from the cursor  +/- speed\n" +
   "F2 overlay  P preview  G grid  M meshes  (overlay text is selectable)\n" +
   "E place  Q remove  R rotate (Shift+R back)  B block  X shape  Z undo  Y redo\n" +
   `?world=${Object.keys(WORLDS).join("|")}&seed=n  ?at=x,y,z teleports on load\n` +
@@ -93,7 +94,7 @@ const CONTROLS_HELP = "drag: look (mouse or touch)  WASD move  Space/C up/down  
   "?glow=0 no emission  ?wind=0 no sway  ?light=0 no block light  ?shadow=0 no shadows\n" +
   `?sky=${Object.keys(SKIES).join("|")} overrides the world's own sky\n` +
   "?far=0 no far field  ?far=steps|bricks|levels debug view (F rebuilds it)  ?farScale=0.1..1\n" +
-  "?farLevels=n ?farFirst=k ?farBricks=n ?farSlabs=n ?farBeam=0  ?farCheck\n" +
+  "?farLevels=n ?farFirst=k ?farBricks=n ?farSlabs=n ?farBeam=0  ?farAdapt=0  ?farCheck\n" +
   `?bench=${Object.keys(SCENES).join("|")}&runs=n benchmark`;
 
 const params = new URLSearchParams(location.search);
@@ -347,6 +348,10 @@ const farOptions = {
 };
 // `?farBeam=0` turns the beam pre-pass off (plan-far-field phase 5).
 const farBeam = params.get("farBeam") !== "0";
+// The far field's reach and build budget follow what they cost on this machine
+// (src/far/adapt.ts). Off for `?farAdapt=0` and during a bench run: a reach that moves
+// under the measurement makes two results incomparable.
+const farAdapt = params.get("farAdapt") !== "0";
 // The far field is on unless `?far=0` says otherwise; `?far=steps|bricks|levels` picks
 // a debug view (plan-far-field)
 // and picks its debug view. F rebuilds its bricks around the camera.
@@ -520,8 +525,15 @@ function describeFar(renderer: Renderer): string {
   const map = renderer.far.map;
   const e = farEdits?.stats;
   const reach = map.extentVoxels(map.levels - 1) / 2;
-  return `far  ${map.levels} levels, k ${map.levelK(0)}..${map.levelK(map.levels - 1)}, ` +
-    `${map.options.size}^3 bricks each, reach ${reach} voxels\n` +
+  const a = renderer.farAdapt;
+  const adapt = a === null
+    ? "fixed"
+    : `adapting: march ${a.report.marchMs.toFixed(2)} + build ${a.report.buildMs.toFixed(2)} ` +
+      `(${(a.report.buildDuty * 100).toFixed(0)}% of frames, worst ${a.report.buildMaxMs.toFixed(1)}) ` +
+      `of ${a.report.budgetMs.toFixed(2)} ms left in the frame, ${a.report.action}`;
+  return `far  ${map.levels}/${map.levelCapacity} levels, k ${map.levelK(0)}..${map.levelK(map.levels - 1)}, ` +
+    `${map.options.size}^3 bricks each, reach ${reach} voxels, ${renderer.far.slabs} slabs/frame\n` +
+    `     ${adapt}\n` +
     `     pool ${s.bricks}/${map.pool.capacity} bricks (${(s.poolBytes / 1048576).toFixed(1)} MiB)  ` +
     `dropped ${s.dropped}  slabs ${s.slabs} built, ${s.queued} queued, ${s.inFlight} in flight  ` +
     `upload ${s.uploadBytes} B/frame\n` +
@@ -705,6 +717,16 @@ async function start(): Promise<void> {
   renderer.far.onSlabBuilt = (level, axis, plane) => farEdits?.slabBuilt(level, axis, plane);
   pool.on(BRICK_JOB, (key, version, output) => farEdits?.onResult(key, version, output as BrickJobOutput));
   renderer.far.beam = farBeam;
+  if (farAdapt && !bench) {
+    // The ceiling is what the clipmap allocated (`?farLevels=n`), not the controller's
+    // own default: asking for more levels than there are buffers would leave the two
+    // disagreeing about how far the world reaches.
+    renderer.farAdapt = new FarAdapt(renderer.far.levels, farOptions.slabsPerFrame ?? 2, renderer.far.resolutionScale, {
+      ...DEFAULT_ADAPT_OPTIONS,
+      maxLevels: renderer.far.map.levelCapacity,
+      minLevels: Math.min(DEFAULT_ADAPT_OPTIONS.minLevels, renderer.far.map.levelCapacity),
+    });
+  }
   if (farOn) {
     renderer.showFar = true;
     renderer.far.debug = farMode === "steps" ? 1 : farMode === "bricks" ? 2 : farMode === "levels" ? 3 : 0;

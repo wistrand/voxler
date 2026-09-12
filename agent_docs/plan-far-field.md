@@ -1,7 +1,8 @@
 # Plan: far-field ray marching
 
-> Status: done (phases 1-5). Promote to `agent_docs/architecture-far-field.md` when the
-> open questions below are settled. Depends on [plan-voxel-data.md](plan-voxel-data.md) (chunk
+> Status: done (phases 1-5, plus the adaptive reach in "How far to reach" below).
+> Promote to `agent_docs/architecture-far-field.md` when the open questions below are
+> settled. Depends on [plan-voxel-data.md](plan-voxel-data.md) (chunk
 > data and edit events) and on the opaque pass from
 > [plan-rendering.md](plan-rendering.md) phase 3. Brick and indirection layouts are
 > owned by [design-formats.md](design-formats.md).
@@ -288,7 +289,9 @@ with the far field on gives `gpu.far` 9.7 ms p50 and a frame that misses 120 Hz
 ### Phase 5: beam pre-pass, resolution scaling, edits
 
 - [x] Beam pre-pass with per-tile start distance
-- [x] Half-resolution target with an upsample that ignores unmarched texels
+- [x] A scaled march target with an upsample that ignores unmarched texels. Half
+      resolution was the default and is no longer: see "Half resolution eats the thin
+      face" below
 - [x] Edit events rebuild affected bricks at every level, budgeted and coalesced
 
 **Verify:** met. Far-pass GPU time at a horizon view, 1920x1080, measured back to back
@@ -322,11 +325,22 @@ to zero pixels differing by more than 8/255, and costs nothing measurable. The c
 worth repeating after any traversal change: render the same frame with `?farBeam=0` and
 diff.
 
-Half resolution needs the blit to do the upsample, and a plain bilinear filter is wrong
+A scaled march needs the blit to do the upsample, and a plain bilinear filter is wrong
 here: a texel whose whole footprint the near field covered was never marched, and
 letting it into the blend bleeds holes along the near field's silhouette. The blit
 weights by alpha, which drops those texels instead. The march's own depth test reads the
 four corners of its footprint and only skips when all of them are covered.
+
+**Half resolution eats the thin face.** It shipped as the default on the strength of the
+table above, which measured GPU time and not what the frame looked like. Terrain is
+terraced, and seen from anywhere but straight down a terrace's top face is foreshortened
+to one or two screen pixels: at half resolution that is half a texel, so runs of it fall
+between samples and the contour lines across distant terrain break up, double, and bleed
+into the rows beside them. Full resolution draws the same lines cleanly. The march is
+about three times the cost (1.0 ms against 3.1 at a horizon view with no near field in
+front of it), which is why the default only moved once the adaptive controller existed
+to pay for it by giving up levels that fog has already taken. `?farScale=0.5` is the
+A/B, and the difference is in the contour lines, not in the fog.
 
 Coarse bricks are rebuilt from the level under them on the GPU (`reduce_bricks` in
 far-build.wgsl), not from chunk data: a coarse brick spans more than a chunk, and the
@@ -359,12 +373,65 @@ the build cost; it is not wired up that way yet.
   right number is for a world with more caves than this one is unmeasured.
 - **Temporal reprojection.** Would let the pass march fewer pixels per frame. Not
   needed: half resolution and the beam brought the march to 0.59 ms p50 at 1080p.
-- **How far to reach.** Settled: eight levels from k = 1, reaching 32,768 voxels, which
-  is CLAUDE.md's far-field view distance. Measured against five levels at one camera
-  (1920x1080, horizon view): the march goes 0.79 ms to 1.44, the pool 37,537 bricks to
-  39,564 (21.7 MiB), the reach 4,096 voxels to 32,768. The coarse levels are nearly free
-  because underground almost every brick is solid throughout and costs no pool slot.
-  What is still open is picking the count from the machine rather than fixing it.
+- **How far to reach.** Settled twice over. First as a constant: eight levels from
+  k = 1, reaching 32,768 voxels, which is CLAUDE.md's far-field view distance. Measured
+  against five levels at one camera (1920x1080, horizon view): the march goes 0.79 ms to
+  1.44, the pool 37,537 bricks to 39,564 (21.7 MiB), the reach 4,096 voxels to 32,768.
+  The coarse levels are nearly free in *memory*, because underground almost every brick
+  is solid throughout and costs no pool slot, but not in march time: eight levels march
+  in nearly twice what five do.
+
+  Then as a controller, which is what the constant could not be: eight levels is right
+  for this GPU and a guess anywhere else. `src/far/adapt.ts` watches what the march and
+  the brick sampling cost, once a second, and moves two things to fit the budget. The
+  order matters and is the whole design:
+
+  1. **`slabsPerFrame`**, how much of the clipmap is sampled per frame. It changes
+     nothing about what the far field looks like once it has caught up, only how long
+     catching up takes, and it costs nothing at all while the queue is empty. Always the
+     first spent and the first taken back.
+  2. **`levels`**, the reach. Fog has already taken most of what the outer levels buy:
+     at the default density a surface 6,600 voxels out is nine parts fog to one part
+     world, and the outer levels reach far past that.
+  3. **`scale`**, the fraction of the frame the march runs at. Last to go, because it is
+     the one a viewer sees everywhere rather than only at the horizon (see "Half
+     resolution eats the thin face" above), and first to come back.
+
+  Two things it has to know that are not obvious. A pass is only sampled on the frames
+  it is encoded, so a clipmap that has caught up leaves the build's ring holding its last
+  expensive frame forever; the controller counts the frames the build actually ran and
+  scales by that duty cycle, or it gives up the whole reach to pay for work that stopped
+  (it did exactly that, in the first version, walking 8 levels down to 3 with a 0.2 ms
+  march). And a level that has just been switched on rebuilds itself, so the burst that
+  follows would read as "still too expensive" and drop it straight back; the controller
+  sits out three windows after any level change.
+
+  Behaviour on the dev machine, forest world: it holds 8 levels and 4 slabs standing
+  still; under a teleport every 3 s it walks down to 5 levels and 1 slab; it is back at
+  8 and 4 about four seconds after the jumping stops. In terrain from a high camera,
+  where the far field fills much more of the frame, it settles at 5 levels and full
+  resolution against a 4.0 ms budget, which is the tradeoff the order above is there to
+  make: keep the sharpness, spend the reach that fog is covering anyway. `?farAdapt=0` pins it, and a bench
+  run pins it automatically, because a reach that moves under the measurement makes two
+  results incomparable.
+
+  **The budget is the frame's leftover, not a constant.** `farBudgetMs()` is the display's
+  period, less what every other timed pass costs, less slack for presenting and the main
+  thread; floored so a machine whose near field has eaten the frame still has some far
+  field, and capped at half the frame so a cheap frame does not hand the whole thing to
+  the distance. On this machine at 120 Hz that lands between 2.3 and 4.1 ms depending on
+  what the near field is doing, which is about where the old 2.8 ms constant was; a
+  60 Hz display has twice the frame and the same near field, so it gets more reach for
+  free, which is the point.
+
+  Two traps in deriving it. The period is *not* the mean or median interval: a run that
+  misses every other vsync has a median of two periods, and reading that as "the frames
+  are long, there is room for more" is exactly backwards. Dropped frames land on
+  multiples of the period, so the short end of the distribution is the period itself, and
+  a low percentile finds it without picking up a jittery outlier. And the far field's own
+  passes are excluded from "what every other pass costs": subtracting them would make the
+  reference move with the thing being controlled, so shrinking the far field would grow
+  the leftover and grow it straight back.
 - **Coarse levels from finer ones, rather than sampled.** Rejected. Sampling every level
   from the SDF does cost eight times the field evaluations, and `reduce_bricks` can
   build a brick from the eight under it, but not the bricks that need building: a slab

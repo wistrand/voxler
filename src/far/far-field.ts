@@ -62,7 +62,11 @@ const RING = 16;
 // sampled would show them (a frame of terrain from somewhere else).
 const CLEARS = 16;
 const DEFAULT_SLABS_PER_FRAME = 2;
-export const DEFAULT_FAR_SCALE = 0.5;
+// Full resolution. Below it a terrace's top face is thinner than the march's sampling,
+// and the contour lines across distant terrain break up and double
+// (gotchas.md "Half-resolution marching eats the thin face"). The adaptive controller
+// gives this up when the frame cannot pay for it, after the reach (src/far/adapt.ts).
+export const DEFAULT_FAR_SCALE = 1.0;
 // March pixels per beam tile, in step with far.wgsl.
 const BEAM_TILE = 8;
 
@@ -133,7 +137,8 @@ export class FarField {
 
   private readonly device: GPUDevice;
   private readonly world: WorldProgram;
-  private readonly slabsPerFrame: number;
+  private slabsPerFrame: number;
+  private builtThisFrame = false;
   private scale: number;
   private readonly slabWords: number; // words per ring slot in the slab buffer
   private readonly planeBricks: number; // B^2
@@ -231,7 +236,7 @@ export class FarField {
     device.queue.writeBuffer(this.colorBuffer, 0, colors);
     this.indirectionBuffer = device.createBuffer({
       label: "far indirection",
-      size: this.map.cells * this.map.levels * 4,
+      size: this.map.cells * this.map.levelCapacity * 4,
       usage: storage,
     });
     this.brickBuffer = device.createBuffer({
@@ -414,6 +419,30 @@ export class FarField {
 
   get ready(): boolean {
     return this.pipeline !== null && this.blitPipeline !== null && this.target !== null;
+  }
+
+  // True when the last encode() dispatched any brick building; see encodeBuilds().
+  get builtLastFrame(): boolean {
+    return this.builtThisFrame;
+  }
+
+  // Reach and build budget, both moved by the adaptive controller (src/far/adapt.ts).
+  // Dropping a level frees its bricks and shortens the view; adding one rebuilds it,
+  // which is a burst of slabs the budget below spreads over the next few seconds.
+  get levels(): number {
+    return this.map.levels;
+  }
+
+  set levels(n: number) {
+    this.map.setLevels(n);
+  }
+
+  get slabs(): number {
+    return this.slabsPerFrame;
+  }
+
+  set slabs(n: number) {
+    this.slabsPerFrame = Math.max(1, n | 0);
   }
 
   // The three buffers a shadow ray needs (src/far/shadow.wgsl): this frame's march
@@ -602,6 +631,11 @@ export class FarField {
     this.stats.inFlight = this.inFlight();
     this.stats.uploadBytes = this.uploadBytes;
     this.stats.coarseQueued = this.map.coarseQueued;
+    // Whether this frame encoded a build at all. The GPU timer only samples a pass on
+    // the frames it runs, so a clipmap that has caught up leaves the build's ring
+    // holding whatever it last cost, forever; the adaptive controller needs to know how
+    // often it actually runs to turn that into a cost per frame (src/far/adapt.ts).
+    this.builtThisFrame = pass !== null;
   }
 
   // Rebuilds the coarse bricks over anything that changed, from the level under them:
@@ -799,7 +833,7 @@ export class FarField {
   // Reads the clipmap back for `?farCheck`. Awaited outside the frame path only.
   async readBack(): Promise<{ indirection: Uint32Array; bricks: Uint32Array }> {
     const device = this.device;
-    const indirectionBytes = this.map.cells * this.map.levels * 4;
+    const indirectionBytes = this.map.cells * this.map.levelCapacity * 4;
     const brickBytes = this.map.pool.capacity * BRICK_WORDS * 4;
     const read = device.createBuffer({
       label: "far readback",

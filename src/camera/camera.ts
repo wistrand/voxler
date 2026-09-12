@@ -61,6 +61,24 @@ export class FlyCamera {
     b[8] = -cy * cp;
   }
 
+  // Direction through a point on the viewport, in world axes, normalized. `ndcX` and
+  // `ndcY` are in [-1, 1] with x to the right and y up, and `aspect` is the viewport's
+  // width over its height. This is the same mapping the projection uses, so the ray
+  // through a pixel is the ray that drew it. Writes and returns `out`.
+  rayThrough(ndcX: number, ndcY: number, aspect: number, out: Float64Array): Float64Array {
+    const t = Math.tan(this.fovY / 2);
+    const b = this.basis;
+    const r = ndcX * t * aspect, u = ndcY * t;
+    const x = b[6] + b[0] * r + b[3] * u;
+    const y = b[7] + b[1] * r + b[4] * u;
+    const z = b[8] + b[2] * r + b[5] * u;
+    const len = Math.hypot(x, y, z) || 1;
+    out[0] = x / len;
+    out[1] = y / len;
+    out[2] = z / len;
+    return out;
+  }
+
   private setAxis(axis: number, world: number): void {
     const c = Math.floor(world / CHUNK_SIZE);
     this.chunk[axis] = c;
