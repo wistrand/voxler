@@ -28,7 +28,17 @@ export interface BlockType {
   readonly emission?: readonly [number, number, number];
   // How far the block's faces sway in the wind, in voxels (plan-living-world phase 2).
   readonly sway?: number;
+  // How brightly the block lights what is around it, 0 (not a light) to LIGHT_MAX.
+  // The level falls by one per voxel from the block, so this is also the light's reach
+  // (plan-living-world phase 4). Emission is how a block looks; light is what it does
+  // to its neighbours, and a block can have either without the other.
+  readonly light?: number;
 }
+
+// Brightest a block light can be, and so how many voxels it reaches: the level falls
+// by one per voxel. 15 fits the four bits the packed quad has for it
+// (design-formats.md "Packed quad").
+export const LIGHT_MAX = 15;
 
 // Size of the color table uploaded to shaders; ids at or above it render as id 0.
 export const MAX_BLOCK_TYPES = 256;
@@ -73,6 +83,7 @@ export const BLOCKS: readonly BlockType[] = [
     opaque: true,
     texture: ["glowcap", "glowcap", "glowcap"],
     emission: [0.15, 0.7, 0.5],
+    light: 13,
   },
   // The rest of the forest (plan-living-world phase 3). Each cap's emission is capped
   // by its own colour: lit plus emission has to stay under 1 (blocks_test.ts).
@@ -83,6 +94,7 @@ export const BLOCKS: readonly BlockType[] = [
     opaque: true,
     texture: ["glowcap-violet", "glowcap-violet", "glowcap-violet"],
     emission: [0.45, 0.15, 0.55],
+    light: 13,
   },
   {
     id: 14,
@@ -91,6 +103,7 @@ export const BLOCKS: readonly BlockType[] = [
     opaque: true,
     texture: ["glowcap-amber", "glowcap-amber", "glowcap-amber"],
     emission: [0.55, 0.35, 0.08],
+    light: 13,
   },
   {
     id: 15,
@@ -99,6 +112,7 @@ export const BLOCKS: readonly BlockType[] = [
     opaque: true,
     texture: ["glowcap-rose", "glowcap-rose", "glowcap-rose"],
     emission: [0.55, 0.10, 0.28],
+    light: 13,
   },
   {
     id: 16,
@@ -113,6 +127,15 @@ export const BLOCKS: readonly BlockType[] = [
   { id: 18, name: "fern", color: [0.26, 0.53, 0.21], opaque: true, texture: ["fern", "fern", "fern"], sway: 0.35 },
   { id: 19, name: "moss", color: [0.22, 0.42, 0.20], opaque: true, texture: ["moss", "moss", "moss"] },
 ];
+
+// Light level each block gives off, indexed by any u16 id, 0 for everything that is
+// not a light. Same shape as BLOCK_OPAQUE and for the same reason: the flood fill
+// (src/mesh/light.ts) reads it once per voxel and cannot afford an object lookup.
+export const BLOCK_LIGHT: Uint8Array = (() => {
+  const table = new Uint8Array(65536);
+  for (const b of BLOCKS) if (b.light) table[b.id] = Math.min(LIGHT_MAX, b.light);
+  return table;
+})();
 
 // 1 where the block id is opaque, indexed by any u16 id; for kernels (meshing,
 // occupancy) that can't afford an object lookup per voxel. Air (0) and registered

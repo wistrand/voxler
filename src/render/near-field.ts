@@ -23,6 +23,12 @@
 import nearWgsl from "./near.wgsl" with { type: "text" };
 import shadingWgsl from "./shading.wgsl" with { type: "text" };
 import skyColorWgsl from "./sky-color.wgsl" with { type: "text" };
+import { type Sky, skyConstantsWgsl } from "./sky.ts";
+import shadowWgsl from "../far/shadow.wgsl" with { type: "text" };
+
+// Bytes of shadow.wgsl's ShadowParams: a mat4x4f, five vec4 and MAX_LEVELS ShadowLevel
+// of three vec4 each. The far field's own params buffer is what really fills it.
+const SHADOW_PARAMS_BYTES = 64 + 5 * 16 + 8 * 48;
 import cullWgsl from "./cull.wgsl" with { type: "text" };
 import checkWgsl from "./cull-check.wgsl" with { type: "text" };
 import "../gpu/globals.ts";
@@ -64,6 +70,8 @@ export interface NearFieldOptions {
   textured: boolean; // sample block textures (?tex=0 draws flat block colors)
   emissive: boolean; // add each block's emission (?glow=0 leaves surfaces to the sun)
   animated: boolean; // blow blocks with a sway amount about in the wind (?wind=0)
+  blockLight: boolean; // light surfaces from nearby glowing blocks (?light=0)
+  shadows: boolean; // march the far field's clipmap for shadows from the sun or moon (?shadow=0)
 }
 
 export const DEFAULT_NEAR_OPTIONS: NearFieldOptions = {
@@ -74,6 +82,8 @@ export const DEFAULT_NEAR_OPTIONS: NearFieldOptions = {
   textured: true,
   emissive: true,
   animated: true,
+  blockLight: true,
+  shadows: true,
 };
 
 export interface NearFieldStats {
@@ -182,6 +192,12 @@ export class NearField {
   private readonly seenBuffers: GPUBuffer[] = [];
   private seenParity = 0;
   private readonly drawLayout: GPUBindGroupLayout;
+  // Shadow rays against the far field's clipmap (src/far/shadow.wgsl). The buffers
+  // belong to FarField; Renderer hands them over once both exist. Without them the
+  // pipeline still needs a group 2, so an all-zero clipmap stands in and every ray
+  // leaves the window at once, which reads as no shadow.
+  private readonly shadowLayout: GPUBindGroupLayout;
+  private shadowBindGroup: GPUBindGroup;
   private readonly drawBindGroups: GPUBindGroup[] = []; // per phase
   private readonly cullLayout: GPUBindGroupLayout;
   // [phase][parity] for the frame's passes, plus the unculled reference.
@@ -245,6 +261,8 @@ export class NearField {
       TEXTURED: options.textured ? 1 : 0,
       EMISSIVE: options.emissive ? 1 : 0,
       ANIMATED: options.animated ? 1 : 0,
+      BLOCK_LIT: options.blockLight ? 1 : 0,
+      SHADOWS: options.shadows ? 1 : 0,
     };
     const limit = Math.min(caps.limits.maxStorageBufferBindingSize, caps.limits.maxBufferSize);
     // Whole clusters of quads, so every quad slot can be used.
@@ -359,6 +377,27 @@ export class NearField {
         { binding: 7, visibility: FRAGMENT, sampler: { type: "filtering" } },
       ],
     });
+    this.shadowLayout = device.createBindGroupLayout({
+      label: "near shadow",
+      entries: [
+        { binding: 0, visibility: FRAGMENT, buffer: { type: "uniform" } },
+        { binding: 1, visibility: FRAGMENT, buffer: readOnly },
+        { binding: 2, visibility: FRAGMENT, buffer: readOnly },
+      ],
+    });
+    // Placeholder until Renderer hands over the far field's clipmap: the pipeline
+    // declares group 2 whether or not shadows are switched on, and a bind group is not
+    // optional. SHADOW_PARAMS_BYTES has to cover shadow.wgsl's ShadowParams.
+    const empty = (usage: number, size: number) => device.createBuffer({ label: "near shadow empty", size, usage });
+    this.shadowBindGroup = device.createBindGroup({
+      label: "near shadow empty",
+      layout: this.shadowLayout,
+      entries: [
+        { binding: 0, resource: { buffer: empty(GPUBufferUsage.UNIFORM, SHADOW_PARAMS_BYTES) } },
+        { binding: 1, resource: { buffer: empty(GPUBufferUsage.STORAGE, 4) } },
+        { binding: 2, resource: { buffer: empty(GPUBufferUsage.STORAGE, 4) } },
+      ],
+    });
     // The translucent draw reads the sorted list, not the order the cull appended.
     for (const visible of [this.visibleBuffers[0], this.visibleBuffers[1], this.sortedBuffer]) {
       this.drawBindGroups.push(device.createBindGroup({
@@ -400,6 +439,7 @@ export class NearField {
 
   async init(
     camera: ShaderSource,
+    sky: Sky,
     format: GPUTextureFormat,
     depthFormat: GPUTextureFormat,
     frameLayout: GPUBindGroupLayout,
@@ -411,8 +451,10 @@ export class NearField {
     const [drawModule, cullModule, checkModule, hizReady] = await Promise.all([
       compileShader(device, "near", [
         camera,
+        { name: "sky.wgsl (generated)", code: skyConstantsWgsl(sky) },
         { name: "sky-color.wgsl", code: skyColorWgsl },
         { name: "shading.wgsl", code: shadingWgsl },
+        { name: "far/shadow.wgsl", code: shadowWgsl },
         { name: "render/near.wgsl", code: nearWgsl },
       ], report),
       compileShader(device, "near cull", [{ name: "render/cull.wgsl", code: cullWgsl }], report),
@@ -422,7 +464,10 @@ export class NearField {
     if (!drawModule || !cullModule || !checkModule || !hizReady) return false;
     this.drawPipeline = await createRenderPipeline(device, {
       label: "near",
-      layout: device.createPipelineLayout({ label: "near", bindGroupLayouts: [frameLayout, this.drawLayout] }),
+      layout: device.createPipelineLayout({
+        label: "near",
+        bindGroupLayouts: [frameLayout, this.drawLayout, this.shadowLayout],
+      }),
       vertex: { module: drawModule, entryPoint: "vs_cluster", constants: this.drawConstants },
       fragment: { module: drawModule, entryPoint: "fs", targets: [{ format }], constants: this.drawConstants },
       primitive: { topology: "triangle-list", cullMode: "back", frontFace: "ccw" },
@@ -434,7 +479,10 @@ export class NearField {
     // top surface once rather than twice.
     this.translucentDraw = await createRenderPipeline(device, {
       label: "near translucent",
-      layout: device.createPipelineLayout({ label: "near", bindGroupLayouts: [frameLayout, this.drawLayout] }),
+      layout: device.createPipelineLayout({
+        label: "near",
+        bindGroupLayouts: [frameLayout, this.drawLayout, this.shadowLayout],
+      }),
       vertex: { module: drawModule, entryPoint: "vs_cluster", constants: this.drawConstants },
       fragment: {
         module: drawModule,
@@ -484,6 +532,17 @@ export class NearField {
 
   get ready(): boolean {
     return this.drawPipeline !== null && this.cullPipelines[1] !== null && this.cullBindGroups[0].length > 0;
+  }
+
+  // Points shadow rays at the far field's clipmap (FarField.shadowResources()). Called
+  // once by Renderer; until then the group holds the empty placeholder the constructor
+  // made, whose zero cell size makes every ray answer "lit".
+  setShadowSource(buffers: readonly GPUBuffer[]): void {
+    this.shadowBindGroup = this.device.createBindGroup({
+      label: "near shadow",
+      layout: this.shadowLayout,
+      entries: buffers.map((buffer, binding) => ({ binding, resource: { buffer } })),
+    });
   }
 
   // Rebuilds the Hi-Z pyramid and the cull bind groups for a new depth target.
@@ -659,6 +718,7 @@ export class NearField {
     if (!this.translucentDraw) return;
     pass.setPipeline(this.translucentDraw);
     pass.setBindGroup(1, this.drawBindGroups[2]);
+    pass.setBindGroup(2, this.shadowBindGroup);
     pass.drawIndirect(this.argsBuffers[2], 0);
   }
 
@@ -666,6 +726,7 @@ export class NearField {
   draw(pass: GPURenderPassEncoder, phase: number): void {
     pass.setPipeline(this.drawPipeline!);
     pass.setBindGroup(1, this.drawBindGroups[phase]);
+    pass.setBindGroup(2, this.shadowBindGroup);
     pass.drawIndirect(this.argsBuffers[phase], 0);
   }
 

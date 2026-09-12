@@ -11,6 +11,7 @@ import { random01 } from "../util/random.ts";
 import { BLOCKS } from "../world/blocks.ts";
 import { voxelIndex } from "../world/coords.ts";
 import { WORLDS, type WorldProgram } from "../worlds/index.ts";
+import { DEFAULT_SKY, SKIES } from "../render/sky.ts";
 
 const BRICK = BLOCKS.find((b) => b.name === "brick")!.id;
 const DIRT = BLOCKS.find((b) => b.name === "dirt")!.id;
@@ -30,7 +31,7 @@ async function gpuDevice(): Promise<GPUDevice | null> {
 }
 
 function world(name: string, code: string, seed = 1): WorldProgram {
-  return { name, code, seed, spawn: [0, 0, 0] };
+  return { name, code, seed, spawn: [0, 0, 0], sky: SKIES[DEFAULT_SKY] };
 }
 
 // Voxelizes the given chunk coordinates and returns results keyed "cx,cy,cz".

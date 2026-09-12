@@ -1,3 +1,4 @@
+import { SKIES } from "../render/sky.ts";
 import {
   BLOCK_TABLE_FLOATS,
   BLOCK_TABLE_STRIDE,
@@ -56,7 +57,8 @@ Deno.test("unregistered ids read as air, and nothing is written past the table",
 Deno.test("emission never pushes a lit surface past what the canvas can show", () => {
   // There is no tonemapping: emission plus the lit albedo has to stay under 1 or the
   // block clips to white and loses its color (plan-living-world phase 1).
-  const AMBIENT = 0.3 + 0.15; // shading.wgsl, an up-facing surface with no sun
+  // The brightest sky any world uses, on an up-facing surface with no direct light.
+  const AMBIENT = Math.max(...Object.values(SKIES).map((s) => s.ambient + s.ambientSky));
   for (const b of BLOCKS) {
     if (b.emission === undefined) continue;
     for (let c = 0; c < 3; c++) {

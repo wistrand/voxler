@@ -3,6 +3,7 @@
 // cluster table are read back and checked against the meshes that should be live.
 
 import cameraWgsl from "./camera.wgsl" with { type: "text" };
+import { DEFAULT_SKY, SKIES } from "./sky.ts";
 import { FlyCamera } from "../camera/camera.ts";
 import type { Caps } from "../gpu/caps.ts";
 import { BinaryMesher } from "../mesh/binary.ts";
@@ -58,6 +59,8 @@ Deno.test("near field: random adds, replacements, removals leave exactly the liv
     quadMiB: 8,
     slots: 64,
     clusterQuads: 32, ao: true, textured: true, emissive: true, animated: true,
+    blockLight: true,
+    shadows: false,
   });
   const output = (m: number): MeshJobOutput => ({
     mesh: meshes[m].slice(0),
@@ -142,8 +145,10 @@ Deno.test("near field: two-phase culled draw matches an unculled one, pixel for 
     quadMiB: 16,
     slots: 256,
     clusterQuads: 32, ao: true, textured: true, emissive: true, animated: true,
+    blockLight: true,
+    shadows: false,
   });
-  const ok = await near.init({ name: "camera.wgsl", code: cameraWgsl }, "rgba8unorm", "depth32float", frameLayout, report);
+  const ok = await near.init({ name: "camera.wgsl", code: cameraWgsl }, SKIES[DEFAULT_SKY], "rgba8unorm", "depth32float", frameLayout, report);
   assert(ok, `init: ${reports.join("\n")}`);
 
   // A 5 x 2 x 5 block of chunk meshes around the camera chunk.
@@ -266,9 +271,11 @@ Deno.test("near field: no holes while the camera moves and turns, frame after fr
     quadMiB: 16,
     slots: 256,
     clusterQuads: 32, ao: true, textured: true, emissive: true, animated: true,
+    blockLight: true,
+    shadows: false,
   });
   assert(
-    await near.init({ name: "camera.wgsl", code: cameraWgsl }, "rgba8unorm", "depth32float", frameLayout, (m) => reports.push(m)),
+    await near.init({ name: "camera.wgsl", code: cameraWgsl }, SKIES[DEFAULT_SKY], "rgba8unorm", "depth32float", frameLayout, (m) => reports.push(m)),
     reports.join("\n"),
   );
   // Terrain-like chunks in a block, so plenty is hidden behind what is in front.
@@ -393,6 +400,8 @@ Deno.test({
       clusterQuads: 32,
       ao: true,
       textured: true, emissive: true, animated: true,
+    blockLight: true,
+    shadows: false,
     });
     const camera = new FlyCamera();
     const cameraUniform = new CameraUniform(device);
@@ -405,7 +414,7 @@ Deno.test({
       layout: frameLayout,
       entries: [{ binding: 0, resource: { buffer: cameraUniform.buffer } }],
     });
-    assert(await near.init({ name: "camera.wgsl", code: cameraWgsl }, "rgba8unorm", "depth32float", frameLayout, (m) => errors.push(m)), errors.join("\n"));
+    assert(await near.init({ name: "camera.wgsl", code: cameraWgsl }, SKIES[DEFAULT_SKY], "rgba8unorm", "depth32float", frameLayout, (m) => errors.push(m)), errors.join("\n"));
 
     // The same mesh in a line of chunks running away from the camera.
     const keys: number[] = [];

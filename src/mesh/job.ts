@@ -17,11 +17,13 @@
 import { readParts } from "../world/arena.ts";
 import { ChunkData } from "../world/chunk.ts";
 import { fillShell, PAD_VOLUME } from "./ao.ts";
+import { hasLight, type LightSource, LightFill } from "./light.ts";
 import { BinaryMesher, hasTranslucent, type MeshOptions } from "./binary.ts";
-import { ALL_NEIGHBORS, FACE_NEIGHBORS } from "./neighbors.ts";
+import { ALL_NEIGHBORS, FACE_NEIGHBORS, NEIGHBOR_OFFSETS } from "./neighbors.ts";
 import { CLUSTER_QUADS, ClusterBuilder } from "./cluster.ts";
 import { meshOutputBytes, writeMeshOutput } from "./output.ts";
 import { newBorders, newPlanes, setBorder, setPlane } from "./planes.ts";
+import { voxelIndex } from "../world/coords.ts";
 import { FACE_COUNT } from "./quad.ts";
 
 export const REF_BLOCK = -1;
@@ -36,6 +38,7 @@ export interface MeshJobInput {
   clusterOrder: number; // ORDER_EMISSION or ORDER_MORTON (?clusterOrder)
   returnBuffer: boolean; // buffer was transferred in: send it back (copy path)
   ao: boolean; // bake AO: refs holds REF_ALL entries, not REF_FACES
+  light: boolean; // bake block light (needs the same REF_ALL neighbors as AO)
   refs: Int32Array; // REF_FACES or REF_ALL x [state, offset]
 }
 
@@ -66,8 +69,50 @@ const options: MeshOptions = { borders: null, shell: null };
 const neighbors: (ChunkData | null)[] = new Array(ALL_NEIGHBORS).fill(null);
 const shell = new Uint8Array(PAD_VOLUME);
 const neighborAt = (i: number) => neighbors[i];
+
+// Neighbor index by chunk offset, [(dx + 1) * 9 + (dy + 1) * 3 + dz + 1]; -1 is the
+// meshed chunk itself, which is not in the neighbor list.
+const NEIGHBOR_OF_OFFSET = (() => {
+  const table = new Int8Array(27).fill(-1);
+  for (let i = 0; i < ALL_NEIGHBORS; i++) {
+    const dx = NEIGHBOR_OFFSETS[i * 3], dy = NEIGHBOR_OFFSETS[i * 3 + 1], dz = NEIGHBOR_OFFSETS[i * 3 + 2];
+    table[(dx + 1) * 9 + (dy + 1) * 3 + dz + 1] = i;
+  }
+  return table;
+})();
+
+// Block light, filled once per job that needs it (light.ts). The chunk being meshed is
+// `lightChunk`; `voxelAt` reads it and its neighbors at padded coordinates.
+const light = new LightFill();
+const lightSources: LightSource[] = [];
+let lightChunk: ChunkData | null = null;
+
+function voxelAt(x: number, y: number, z: number): number {
+  // >> 5 floors negatives, which is what maps -1 to the chunk below.
+  const cx = x >> 5, cy = y >> 5, cz = z >> 5;
+  let chunk: ChunkData | null;
+  if (cx === 0 && cy === 0 && cz === 0) {
+    chunk = lightChunk;
+  } else {
+    const i = NEIGHBOR_OF_OFFSET[(cx + 1) * 9 + (cy + 1) * 3 + cz + 1];
+    chunk = i < 0 ? null : neighbors[i];
+  }
+  // A chunk outside the world reads as air, so light spills into it rather than
+  // stopping at a boundary that is not there.
+  return chunk === null ? 0 : chunk.get(voxelIndex(x & 31, y & 31, z & 31));
+}
 // Uniform chunks by id, made once per worker (read-only here).
 const uniforms: (ChunkData | undefined)[] = [];
+
+// Keeps the source list preallocated: the job path never allocates.
+function pushLightSource(n: number, dx: number, dy: number, dz: number, chunk: ChunkData): number {
+  const src = lightSources[n] ??= { dx: 0, dy: 0, dz: 0, chunk };
+  src.dx = dx;
+  src.dy = dy;
+  src.dz = dz;
+  src.chunk = chunk;
+  return n + 1;
+}
 
 function refChunk(blocks: ArrayBuffer | SharedArrayBuffer | null, refs: Int32Array, i: number): ChunkData | null {
   const state = refs[i * 2];
@@ -95,6 +140,23 @@ export function runMeshJob(
     options.shell = shell;
   } else {
     options.shell = null;
+  }
+  // Block light, but only when one of the 27 chunks holds a light: filling the grid
+  // otherwise would cost every chunk in the world what a handful of them need.
+  options.light = null;
+  if (input.ao && input.light) {
+    let sources = 0;
+    if (hasLight(chunk)) sources = pushLightSource(sources, 0, 0, 0, chunk);
+    for (let i = 0; i < ALL_NEIGHBORS; i++) {
+      const n = neighbors[i];
+      if (!hasLight(n)) continue;
+      sources = pushLightSource(sources, NEIGHBOR_OFFSETS[i * 3], NEIGHBOR_OFFSETS[i * 3 + 1], NEIGHBOR_OFFSETS[i * 3 + 2], n!);
+    }
+    if (sources > 0) {
+      lightChunk = chunk;
+      light.fill(lightSources, sources, voxelAt);
+      options.light = light.levels;
+    }
   }
   const opaque = mesher.mesh(chunk, planes, options);
   neighbors.fill(null);

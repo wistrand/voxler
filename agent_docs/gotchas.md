@@ -286,6 +286,13 @@ disproved, drop the marker or correct the entry. Append new traps as they are hi
   [plan-rendering.md](plan-rendering.md) exists to prevent this; don't simplify it
   to one phase.
 
+- **`smoothstep` with equal ends is a WGSL compile error.** `smoothstep(a, a, x)` where
+  both ends are the same constant fails at `createShaderModule`, not at run time, and a
+  branch around the call does not save it: the module is validated whole. It bites when
+  the constants are generated (`skyConstantsWgsl()`), because a preset that never draws
+  the feature still has to produce a shader that compiles. Clamp the generated ends apart
+  and scale the term by a strength constant instead of branching on it.
+
 ## Findings
 
 Diagnosed bugs, as symptom, diagnosis, fix, takeaway. None diagnosed yet.
@@ -314,3 +321,36 @@ Diagnosed bugs, as symptom, diagnosis, fix, takeaway. None diagnosed yet.
   `dom.webgpu.allow-present-without-readback` to false in `about:config` (inferred,
   untested: presents through CPU readback instead of DMA-BUF sharing, slower, so not
   for performance measurements).
+
+### Compiling a heavy world's pipelines can take two minutes, and used to hold the frame
+
+- **Symptom:** `?world=forest` showed a black screen for many seconds, sometimes two
+  minutes, with `voxler.renderer` null and no error in the overlay.
+- **Diagnosis:** `Renderer.init()` awaited every pipeline before returning, and the frame
+  loop draws nothing until `voxler.renderer` exists. Timing the stages (`renderer.startup`,
+  on the overlay's `world` line) on a cold shader cache: sky 20 ms, near 40, voxelize
+  3400, far build 4600, and the SDF preview **117,800**. The preview compiles the world
+  program into a sphere-tracing loop, so its cost grows with the world, and the forest
+  with three tree species is a large program. Chrome caches compiled pipelines, so only
+  the first load after a real change to the world pays it; a comment-only change does not
+  invalidate the cache, which makes cold compiles hard to reproduce on purpose.
+- **Fix:** `init()` now returns once the sky, grid and gizmo pipelines are up (about
+  50 ms) and the frame loop starts there. Every pass already checked its own `ready`, so
+  the sky draws, then the far field, then meshes, as each arrives. `renderer.worldReady`
+  is the rest, and streaming waits on that. The preview is built the first time it is
+  switched on, not at startup, because it is off by default and the slowest thing here to
+  compile.
+- **Takeaway:** never await a shader compile on the path to the first frame. Measure the
+  stages before guessing which one is slow: the answer here was 25x the next worst.
+
+### The grove bench walked 44 voxels underground
+
+- **Symptom:** the grove scene reported 120 Hz, `stream.holes` 0 and a CPU frame of
+  0.40 ms in a forest that plainly cost more than that.
+- **Diagnosis:** scene paths are offsets from the world's spawn point. The forest world
+  grew mountains and lakes under it and the spawn stayed at y = 70, where the floor is now
+  94. Every frame of the run was inside solid rock, drawing nothing.
+- **Fix:** the spawn stands over the canopy and the scene drops under it. On the real path
+  the same scene misses about 100 frames of 1400.
+- **Takeaway:** after changing a world's terrain, check its spawn and its bench scenes
+  before trusting a number from them. A suspiciously good result is a result to check.

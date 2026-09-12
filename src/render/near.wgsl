@@ -43,6 +43,13 @@ override AO_ENABLED: bool = true;
 override TEXTURED: bool = true;
 override EMISSIVE: bool = true;
 override ANIMATED: bool = true;
+// Block light baked per quad corner (plan-living-world phase 4); ?light=0 is the A/B,
+// and it also meshes without filling the light grid.
+override BLOCK_LIT: bool = true;
+// Shadow rays marched against the far field's clipmap (src/far/shadow.wgsl); ?shadow=0
+// is the A/B, and it is off whenever the far field is, because there is no clipmap to
+// march then.
+override SHADOWS: bool = true;
 
 // Wind (plan-living-world.md phase 2). The displacement is a pure function of the world
 // voxel and the clock, so two chunks meeting at a boundary move their shared face by
@@ -93,6 +100,7 @@ struct VsOut {
   @location(1) ao: f32, // occlusion level 0..3, interpolated across the quad
   @location(2) view: vec3f, // eye to fragment in render space, for fog
   @location(3) uv: vec2f, // position across the quad in voxels, one tile each
+  @location(4) light: f32, // block-light level 0..15, interpolated across the quad
 }
 
 fn degenerate() -> VsOut {
@@ -102,6 +110,7 @@ fn degenerate() -> VsOut {
   out.ao = 0.0;
   out.view = vec3f(0.0, 0.0, 1.0);
   out.uv = vec2f(0.0);
+  out.light = 0.0;
   return out;
 }
 
@@ -122,6 +131,12 @@ fn corner_of(face: u32, k: u32, first: u32) -> u32 {
     }
   }
   return (c + first) & 3u;
+}
+
+// Block-light level (0..15 + 3) of corner c: the quad's base level in word0 bits 28-31
+// plus the corner's step above it in word1 (design-formats.md "Packed quad").
+fn light_level(w0: u32, w1: u32, c: u32) -> f32 {
+  return f32(w0 >> 28u) + f32((w1 >> (24u + 2u * c)) & 3u);
 }
 
 // Occlusion level (0..3) of corner c, from the quad's AO byte.
@@ -154,6 +169,10 @@ fn quad_vertex(w0: u32, w1: u32, k: u32, slot: u32) -> VsOut {
   if (AO_ENABLED) {
     ao = ao_level(w1, c);
   }
+  var light = 0.0;
+  if (BLOCK_LIT) {
+    light = light_level(w0, w1, c);
+  }
   if (c == 1u || c == 2u) {
     p[u] += w;
   }
@@ -173,6 +192,7 @@ fn quad_vertex(w0: u32, w1: u32, k: u32, slot: u32) -> VsOut {
   out.position = camera.view_proj * vec4f(at, 1.0);
   out.id_face = (id << 3u) | face;
   out.ao = ao;
+  out.light = light;
   out.view = at - camera.offset.xyz;
   out.uv = vec2f(f32(select(0, w, c == 1u || c == 2u)), f32(select(0, h, c >= 2u)));
   return out;
@@ -214,7 +234,24 @@ fn fs(in: VsOut) -> @location(0) vec4f {
   // Emission is added to the lit surface and fogged with it: a glowing block is its own
   // color whatever the sun is doing, and still fades into the distance like everything
   // else (plan-living-world.md phase 1).
-  var lit = base * shade * surface_light(n);
+  // Shadow the direct term only: the sky's ambient reaches a surface whatever stands
+  // between it and the moon, and shadowing that as well turns every overhang black.
+  var sun = 1.0;
+  if (SHADOWS) {
+    let to_light = normalize(LIGHT_DIR);
+    // A face turned away from the light has no direct term to shadow, so it needs no
+    // ray. That is about half of every surface in the scene and the cheapest half of
+    // the cost to give back.
+    if (dot(n, to_light) > 0.0) {
+      sun = light_shadow(in.view + camera.offset.xyz, n, to_light);
+    }
+  }
+  var lit = base * shade * surface_light_shadowed(n, sun);
+  if (BLOCK_LIT) {
+    // Occluded as the sun is: a corner the geometry hides is dark whatever is lighting
+    // it, and without this the light pools flat over a crevice.
+    lit += base * shade * block_light(in.light);
+  }
   if (EMISSIVE) {
     lit += glow.rgb * base;
   }

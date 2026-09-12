@@ -534,12 +534,20 @@ fragment stage is where the rest of this phase lands. Revisit if the near field
 becomes vertex-bound at a larger radius, or if the quad arena becomes the
 constraint.
 
-Result, lighting. `src/render/shading.wgsl` owns the sun direction and color, the
-sky ambient term, and the fog density, and both the near field and the SDF preview
-call `surface_light()` and `apply_fog()`, so a mesh and the preview behind it shade
-the same (the far field will use them too). The near-field fragment shader builds
-the face normal from the face index, multiplies by the AO factor, and fogs toward
-`sky_color()` along the interpolated eye-to-fragment vector.
+Result, lighting. `src/render/shading.wgsl` owns the shape of the light: a directional
+term, a sky ambient term and fog, and the near field, the SDF preview and the far field
+all call `surface_light()` and `apply_fog()`, so a mesh, the preview behind it and the
+distance past it shade the same. The near-field fragment shader builds the face normal
+from the face index, multiplies by the AO factor, and fogs toward `sky_color()` along
+the interpolated eye-to-fragment vector.
+
+Two things arrived here later, both in
+[plan-living-world.md](plan-living-world.md): the *numbers* those functions read now
+come from the world's sky preset (`src/render/sky.ts`), generated into WGSL, which is
+what lets one world be a bright day and another a moonlit night without a second
+lighting model; and `surface_light_shadowed()` scales the direct term by a shadow ray
+marched against the far field's clipmap, so the near field pays about 1.2 ms a frame at
+1080p for shadows and no shadow map exists.
 
 Cost, against the same scenes with the old fixed per-face shade
 (`flyover.20260912T115023Z` -> `T115713Z`, `cave.20260912T114939Z` -> `T115727Z`,

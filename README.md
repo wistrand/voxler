@@ -15,9 +15,16 @@ GPU time per pixel rather than growing with the number of voxels.
 
 ## Status
 
-Early. Worlds voxelize on the GPU into compressed chunk storage, are meshed in
-workers, and are drawn as greedy quads by vertex pulling; culling and shading are
-next. A ray-traced SDF preview of the same world is one key away.
+Working, and fast enough to be worth looking at. Worlds voxelize on the GPU into
+compressed chunk storage, are meshed in workers, culled and drawn as greedy quads by
+vertex pulling, and continue past the meshed radius as a ray-marched brickmap out to
+32,768 voxels. Surfaces carry baked ambient occlusion and baked light from glowing
+blocks, and cast shadows from the sun or moon. Voxels can be edited and the edits
+survive the chunk being regenerated. A ray-traced preview of the same world is one key
+away, though for a heavy world it takes a while to compile the first time.
+
+Three worlds ship: a showcase of the SDF primitives, a terrain world, and a fantasy
+forest at night with glowing fungus, lakes and mountains.
 
 ## Requirements
 
@@ -46,6 +53,11 @@ deno task dev      # then open the printed URL
   pulling from storage buffers.
 - **Far field**: a camera-centered clipmap of 8^3 bricks at doubling cell sizes,
   ray-marched in compute and composited behind the near field.
+- **Light**: one sun or moon, sky ambient and fog, shared by every surface path so the
+  meshed world, the preview and the ray-marched distance agree. Glowing blocks flood
+  light through the voxels around them, baked per quad corner in the mesher, and
+  shadows are rays marched against the same brickmap the far field uses, so there is
+  no shadow map and no second draw of the scene.
 
 Design notes and plans live in [agent_docs/](agent_docs/).
 

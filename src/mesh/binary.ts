@@ -38,11 +38,17 @@
 // Baked AO (phase 5, opaque pass only): given a padded shell (ao.ts), each visible
 // face gets its AO byte during the transpose, and merging also requires equal AO
 // bytes. Without a shell every AO byte is 0 (unoccluded).
+//
+// Baked block light (plan-living-world phase 4) works the same way from a padded level
+// grid (light.ts), and joins the merge key beside AO: a quad is one light value, so a
+// pool of light under a mushroom breaks the merge into steps. That is the cost of
+// baking it, and why the job only fills the grid where a light is.
 
-import { BLOCK_OPAQUE, BLOCK_TRANSLUCENT } from "../world/blocks.ts";
+import { BLOCK_LIGHT, BLOCK_OPAQUE, BLOCK_TRANSLUCENT } from "../world/blocks.ts";
 import type { ChunkData } from "../world/chunk.ts";
 import { CHUNK_VOLUME } from "../world/coords.ts";
 import { faceAo, PAD_VOLUME, padIndex } from "./ao.ts";
+import { faceLight } from "./light.ts";
 import { MeshBuilder } from "./builder.ts";
 import { BORDER_IDS, PLANE_WORDS } from "./planes.ts";
 import { columnsFromRows, RowReader } from "./rows.ts";
@@ -65,6 +71,10 @@ export interface MeshOptions {
   // Neighbor border ids (planes.ts setBorder); needed only for chunks with
   // translucent voxels. null reads every neighbor voxel as a different id.
   borders?: Uint16Array | null;
+  // Padded block-light levels (light.ts); bakes light into opaque quads the same way
+  // the shell bakes AO. null leaves every quad unlit, which is what a chunk with no
+  // light near it gets.
+  light?: Uint8Array | null;
 }
 
 const DEFAULT_OPTIONS: MeshOptions = {};
@@ -103,6 +113,10 @@ export class BinaryMesher {
   // current direction, [d << 10 | v << 5 | u].
   private readonly padded = new Uint8Array(PAD_VOLUME);
   private readonly aoFaces = new Uint8Array(CHUNK_VOLUME);
+  // Baked block light: the padded levels the job filled, and the packed light of each
+  // visible face of the current direction, indexed like aoFaces.
+  private lightLevels: Uint8Array | null = null;
+  private readonly lightFaces = new Uint16Array(CHUNK_VOLUME);
   // Translucent ids in the chunk, their source and occluder columns, and planes.
   private readonly tIds: number[] = [];
   private readonly tSource: Uint32Array[][] = [];
@@ -116,6 +130,7 @@ export class BinaryMesher {
     const out = this.out;
     const merge = options.merge ?? true;
     const shell = options.shell ?? null;
+    this.lightLevels = options.light ?? null;
     out.reset();
     this.translucent.reset();
     const opaque = this.buildColumns(chunk);
@@ -294,6 +309,8 @@ export class BinaryMesher {
     let used = 0; // bit d set when slice d has faces
     const padded = this.padded;
     const aoFaces = this.aoFaces;
+    const levels = this.lightLevels;
+    const lightFaces = this.lightFaces;
 
     // Cull and transpose: column (u, v) bit d -> slice d row v bit u.
     for (let v = 0; v < 32; v++) {
@@ -317,12 +334,19 @@ export class BinaryMesher {
               ? faceAo(padded, u, d, v, face)
               : faceAo(padded, u, v, d, face);
           }
+          if (levels !== null) {
+            lightFaces[(d << 10) | (v << 5) | u] = axis === 0
+              ? faceLight(levels, d, v, u, face)
+              : axis === 1
+              ? faceLight(levels, u, d, v, face)
+              : faceLight(levels, u, v, d, face);
+          }
         }
       }
     }
 
     const single = id >= 0; // one id for the whole pass
-    const plain = single && !bake; // every face has the same merge key
+    const plain = single && !bake && levels === null; // every face has the same merge key
     const sa = STRIDE_AXIS[axis], su = STRIDE_U[axis], sv = STRIDE_V[axis];
     while (used !== 0) {
       const d = 31 - Math.clz32(used & -used);
@@ -335,14 +359,19 @@ export class BinaryMesher {
           const u0 = 31 - Math.clz32(row & -row);
           const cell = sliceOffset + u0 * su + v * sv;
           const key = single ? id : this.indexAt(cell); // id, or palette index
+          const qid = single ? id : this.chunk!.paletteAt(key);
           const aoRow = (d << 10) | (v << 5);
           const ao = bake ? aoFaces[aoRow | u0] : 0;
-          // Width: consecutive set bits from u0 with the same id and AO.
+          // A light's own faces are left unlit: they already carry the block's emission,
+          // and adding the light it is casting on top blows the colour out to white.
+          const light = levels !== null && BLOCK_LIGHT[qid] === 0 ? lightFaces[aoRow | u0] : 0;
+          // Width: consecutive set bits from u0 with the same id, AO and light.
           let w = 1;
           while (
             u0 + w < 32 && ((row >>> (u0 + w)) & 1) !== 0 &&
             (plain ||
-              ((single || this.indexAt(cell + w * su) === key) && (!bake || aoFaces[aoRow | (u0 + w)] === ao)))
+              ((single || this.indexAt(cell + w * su) === key) && (!bake || aoFaces[aoRow | (u0 + w)] === ao) &&
+                (levels === null || lightFaces[aoRow | (u0 + w)] === light)))
           ) w++;
           const mask = (w >= 32 ? -1 : (1 << w) - 1) << u0;
           // Height: following rows that contain the whole run, with the same keys.
@@ -353,7 +382,10 @@ export class BinaryMesher {
               const rowAo = aoRow + (h << 5) + u0;
               let same = true;
               for (let k = 0; k < w; k++) {
-                if ((!single && this.indexAt(rowCell + k * su) !== key) || (bake && aoFaces[rowAo + k] !== ao)) {
+                if (
+                  (!single && this.indexAt(rowCell + k * su) !== key) || (bake && aoFaces[rowAo + k] !== ao) ||
+                  (levels !== null && lightFaces[rowAo + k] !== light)
+                ) {
                   same = false;
                   break;
                 }
@@ -379,8 +411,7 @@ export class BinaryMesher {
             x = u0;
             y = v;
           }
-          const qid = single ? id : this.chunk!.paletteAt(key);
-          out.push(encodeWord0(x, y, z, w, h, face), encodeWord1(qid, ao));
+          out.push(encodeWord0(x, y, z, w, h, face, light), encodeWord1(qid, ao, light));
         }
       }
     }
@@ -427,7 +458,10 @@ export class BinaryMesher {
           }
           const qid = id >= 0 ? id : this.chunk!.paletteAt(this.indexAt(x | (z << 5) | (y << 10)));
           const ao = bake ? faceAo(this.padded, x, y, z, face) : 0;
-          out.push(encodeWord0(x, y, z, 1, 1, face), encodeWord1(qid, ao));
+          const light = this.lightLevels !== null && BLOCK_LIGHT[qid] === 0
+            ? faceLight(this.lightLevels, x, y, z, face)
+            : 0;
+          out.push(encodeWord0(x, y, z, 1, 1, face, light), encodeWord1(qid, ao, light));
         }
       }
     }

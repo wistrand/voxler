@@ -11,7 +11,7 @@ import { CPU_FRAME, CPU_RENDER, CPU_UPDATE, Stats } from "./debug/stats.ts";
 import { formatCaps } from "./gpu/caps.ts";
 import { createGpu, type Gpu } from "./gpu/device.ts";
 import { Renderer } from "./render/renderer.ts";
-import { WorkerPool } from "./workers/pool.ts";
+import { DEFAULT_JOBS_PER_MESSAGE, WorkerPool } from "./workers/pool.ts";
 import type { CompressInput, CompressOutput } from "./workers/jobs.ts";
 import { BrushBatch } from "./brush/batch.ts";
 import { BrushGrid } from "./brush/grid.ts";
@@ -39,6 +39,7 @@ import { ChunkStreamer, DEFAULT_STREAM_OPTIONS, type StreamOptions } from "./wor
 import type { Voxelizer } from "./sdf/voxelizer.ts";
 import { runWorkerSelfTest } from "./workers/selftest.ts";
 import { DEFAULT_WORLD, type WorldProgram, WORLDS } from "./worlds/index.ts";
+import { DEFAULT_SKY, SKIES } from "./render/sky.ts";
 
 declare global {
   // Console handle for debugging, e.g. `voxler.gpu.device.destroy()` to test
@@ -89,7 +90,8 @@ const CONTROLS_HELP = "drag: look (mouse or touch)  WASD move  Space/C up/down  
   "?regen=n chunks regenerated per frame  ?regenCheck compares each replacement\n" +
   "?mesh=0 no meshing  ?cull=n mask (0 none, 3 no occlusion, 7 all)  ?cullCheck  ?clusterQuads=n\n" +
   "?clusterOrder=morton  ?nearMB=n quad arena  ?ao=0 no baked AO  ?tex=0 no textures\n" +
-  "?glow=0 no emission  ?wind=0 no sway\n" +
+  "?glow=0 no emission  ?wind=0 no sway  ?light=0 no block light  ?shadow=0 no shadows\n" +
+  `?sky=${Object.keys(SKIES).join("|")} overrides the world's own sky\n` +
   "?far=0 no far field  ?far=steps|bricks|levels debug view (F rebuilds it)  ?farScale=0.1..1\n" +
   "?farLevels=n ?farFirst=k ?farBricks=n ?farSlabs=n ?farBeam=0  ?farCheck\n" +
   `?bench=${Object.keys(SCENES).join("|")}&runs=n benchmark`;
@@ -156,7 +158,12 @@ function selectWorld(): WorldProgram {
   }
   const seed = Number(params.get("seed") ?? 1);
   const entry = WORLDS[name];
-  return { name, code: entry.code, seed: Number.isInteger(seed) ? seed >>> 0 : 1, spawn: entry.spawn };
+  // `?sky=<name>` overrides the world's own preset, so a world can be seen at another
+  // time of day without editing it.
+  const skyName = params.get("sky") ?? entry.sky ?? DEFAULT_SKY;
+  const sky = SKIES[skyName] ?? SKIES[DEFAULT_SKY];
+  if (!(skyName in SKIES)) overlay.error(`unknown sky "${skyName}"; known: ${Object.keys(SKIES).join(", ")}`);
+  return { name, code: entry.code, seed: Number.isInteger(seed) ? seed >>> 0 : 1, spawn: entry.spawn, sky };
 }
 
 // `?size=1920x1080` renders at a fixed pixel size (stretched to the window).
@@ -197,6 +204,7 @@ const stats = new Stats();
 const pool = new WorkerPool(
   (i) => new Worker(new URL("./workers/voxel.worker.js", import.meta.url), { type: "module", name: `voxel-${i}` }),
   workerCount(),
+  intParam("jobBatch", DEFAULT_JOBS_PER_MESSAGE, 1, 64),
 );
 pool.onError = (kind, key, message) => overlay.error(`job ${kind} ${key} failed: ${message}`);
 globalThis.voxler = { gpu: null, renderer: null, camera, pool };
@@ -316,6 +324,12 @@ const textured = params.get("tex") !== "0";
 const emissive = params.get("glow") !== "0";
 // `?wind=0` holds the foliage still, the A/B for phase 2.
 const animated = params.get("wind") !== "0";
+// Block light is baked in the mesh job as well as read in the shader, so ?light=0 turns
+// off both: the A/B is what the fill costs, not only what it looks like.
+const blockLight = params.get("light") !== "0";
+// Shadow rays march the far field's clipmap, so they need it built: `?far=0` leaves the
+// scene unshadowed whatever this says.
+const shadows = params.get("shadow") !== "0";
 // `?farCheck` compares the SDF-sampled bricks against the same region reduced from
 // resident chunk data (plan-far-field phase 2). `?farLevels=n` sets the clipmap's
 // level count, `?farBricks=n` the pool capacity in bricks, and `?farSlabs=n` how many
@@ -346,8 +360,10 @@ const nearOptions: NearFieldOptions = {
   textured,
   emissive,
   animated,
+  blockLight,
+  shadows: shadows && farOn,
 };
-const mesher = meshing ? new MeshScheduler(store, pool, { ...DEFAULT_MESH_OPTIONS, clusterQuads, clusterOrder, ao: bakedAo }) : null;
+const mesher = meshing ? new MeshScheduler(store, pool, { ...DEFAULT_MESH_OPTIONS, clusterQuads, clusterOrder, ao: bakedAo, blockLight }) : null;
 if (mesher) {
   // Meshes go to whichever renderer is current; a new renderer asks for all of
   // them again (remeshAll after init).

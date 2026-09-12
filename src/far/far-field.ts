@@ -26,6 +26,7 @@ import type { WorldProgram } from "../worlds/index.ts";
 import type { TextureData } from "../render/textures.ts";
 import { CoverageMask, COVERAGE_WORDS } from "./coverage.ts";
 import skyColorWgsl from "../render/sky-color.wgsl" with { type: "text" };
+import { skyConstantsWgsl } from "../render/sky.ts";
 import shadingWgsl from "../render/shading.wgsl" with { type: "text" };
 import farWgsl from "./far.wgsl" with { type: "text" };
 import buildWgsl from "./far-build.wgsl" with { type: "text" };
@@ -349,6 +350,7 @@ export class FarField {
     const device = this.device;
     const [march, blit, build] = await Promise.all([
       compileShader(device, "far", [
+        { name: "sky.wgsl (generated)", code: skyConstantsWgsl(this.world.sky) },
         { name: "sky-color.wgsl", code: skyColorWgsl },
         { name: "shading.wgsl", code: shadingWgsl },
         { name: "far/far.wgsl", code: farWgsl },
@@ -412,6 +414,13 @@ export class FarField {
 
   get ready(): boolean {
     return this.pipeline !== null && this.blitPipeline !== null && this.target !== null;
+  }
+
+  // The three buffers a shadow ray needs (src/far/shadow.wgsl): this frame's march
+  // parameters, the clipmap's indirection and the brick pool. The near field binds them
+  // to its draw pipeline, which is the only consumer outside this class.
+  shadowResources(): readonly GPUBuffer[] {
+    return [this.paramsBuffer, this.indirectionBuffer, this.brickBuffer];
   }
 
   // Resolution the march runs at, as a fraction of the frame. Changing it rebuilds the

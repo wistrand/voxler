@@ -9,6 +9,7 @@ import cameraWgsl from "../render/camera.wgsl" with { type: "text" };
 import brushWgsl from "../brush/brush.wgsl" with { type: "text" };
 import shadingWgsl from "../render/shading.wgsl" with { type: "text" };
 import skyColorWgsl from "../render/sky-color.wgsl" with { type: "text" };
+import { skyConstantsWgsl } from "../render/sky.ts";
 import { compileShader, createRenderPipeline, type Report } from "../gpu/shader.ts";
 import { type BrushGrid, GRID_CELLS, MAX_GRID_OP_WORDS, MAX_GRID_RECORDS } from "../brush/grid.ts";
 import { INSTANCE_WORDS } from "../brush/format.ts";
@@ -138,6 +139,7 @@ export class SdfPreview {
     const [traceModule, blitModule] = await Promise.all([
       compileShader(device, `preview (${world.name})`, [
         { name: "camera.wgsl", code: cameraWgsl },
+        { name: "sky.wgsl (generated)", code: skyConstantsWgsl(world.sky) },
         { name: "sky-color.wgsl", code: skyColorWgsl },
         { name: "shading.wgsl", code: shadingWgsl },
         { name: "brush/brush.wgsl", code: brushWgsl },

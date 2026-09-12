@@ -51,9 +51,10 @@ integers, and convert to f32 last.
 ## Voxel encoding
 
 A voxel is a `u16` block id. `0` is air. The id indexes the block registry, which
-holds per-type properties: opaque or translucent, emissive, texture layer per face,
-far-field color. Properties are never packed into the voxel itself; this keeps
-palettes small and lets properties change without rewriting chunks.
+holds per-type properties: opaque or translucent, emissive, how far it sways, how
+brightly it lights its neighbours, texture layer per face, far-field color. Properties
+are never packed into the voxel itself; this keeps palettes small and lets properties
+change without rewriting chunks.
 
 The block table uploaded to shaders (`blockColorTable()`) is `BLOCK_TABLE_STRIDE`
 floats per block, `MAX_BLOCK_TYPES` of them, two `vec4f` in WGSL: block `id`'s colour is
@@ -71,6 +72,13 @@ white and the block loses its colour, so emission stays small enough that the tw
 together fit (a unit test checks it). The far-field colour table
 (`farColorTable()`) has the same stride and the same meaning, with solidity in place of
 coverage.
+
+A block's `light` is not in this table. It is a level (0 to `LIGHT_MAX`) the mesh job
+floods through the voxels around the block and bakes into the quads it touches
+("Packed quad"), so nothing reads it at draw time; the shader reads `BLOCK_LIGHT_COLOR`
+and the sky preset's strength instead (`src/render/shading.wgsl`). Emission is how a
+block looks; light is what it does to its neighbours, and a block can have either
+without the other.
 
 "Solid" in this project means opaque. Face culling and far-field occupancy use
 opacity. Opacity comes from `BLOCK_OPAQUE` (`src/world/blocks.ts`), indexed by any
@@ -159,10 +167,10 @@ word0  bits 0-4    x      local voxel coordinate of the quad's min corner
        bits 15-19  w - 1  extent along the face's first tangent axis
        bits 20-24  h - 1  extent along the face's second tangent axis
        bits 25-27  face   0 +X, 1 -X, 2 +Y, 3 -Y, 4 +Z, 5 -Z
-       bits 28-31  spare
+       bits 28-31  light base, the quad's lowest corner level 0-15
 word1  bits 0-15   block id
        bits 16-23  AO, 2 bits per corner, corner order fixed per face
-       bits 24-31  spare  (reserved: light level)
+       bits 24-31  light offsets, 2 bits per corner above the base
 ```
 
 Coordinates are voxel positions, 0..31. For positive faces the shader adds 1 along
@@ -180,6 +188,16 @@ without AO has 0 everywhere and reads as unoccluded. Computed by `faceAo()` in
 the voxel index) whose shell holds the 26 neighbors' touching voxels (`fillShell()`,
 neighbors in `src/mesh/neighbors.ts` order). AO joins the merge key, so every voxel
 under a quad has the quad's AO byte.
+
+Block light (plan-living-world phase 4; `?light=0` meshes and draws without it) needs
+twelve bits and neither word has twelve spare, so it is split: the quad's lowest corner
+level in word0's four, and each corner's step above it (0 to 3) in word1's eight, corners
+in the AO byte's order. A corner more than three levels above the base is clamped, which
+is a one-level error at the foot of a light. Computed by `faceLight()` in
+`src/mesh/light.ts` from a padded level grid (`lightIndex()`, 32 + 2 * `LIGHT_REACH` a
+side) that the mesh job flood fills from the lights in the 27 chunks it holds. Light joins
+the merge key beside AO, so a pool of light under a glowing block breaks its quads into
+steps. A light's own faces carry zero: they already draw the block's emission.
 
 A padding quad (to fill a short cluster) is all zero bits in both words with block
 id 0; the vertex shader collapses it to a degenerate position.
@@ -240,6 +258,10 @@ on the copy path (`sharedId` -1), in a pooled `buffer` holding only those blocks
 (transferred in and back). Built by `MeshScheduler.submit()`
 (`src/world/mesh-scheduler.ts`).
 
+With `input.ao` the job sends all 26 neighbors (`REF_ALL`), not just the six faces, for
+the AO shell. `input.light` bakes block light from the same 26, and needs them: a light
+up to `LIGHT_REACH` voxels outside the chunk still reaches into it.
+
 Output, one buffer per chunk (`src/mesh/output.ts`, `writeMeshOutput` and
 `readMeshOutput`):
 
@@ -299,13 +321,14 @@ the origin.
 
 ## World program
 
-Implemented for the preview (plan-sdf-generation phase 1); the voxelizer and brick
-sampler will use the same contract. A world is a WGSL file in `src/worlds/`,
-registered in `WORLDS` (`src/worlds/index.ts`) with a spawn point above its surface,
-and selected with `?world=<name>`.
+Implemented, and the same contract in all three consumers: the SDF preview, the GPU
+voxelizer and the far field's brick builder. A world is a WGSL file in `src/worlds/`,
+registered in `WORLDS` (`src/worlds/index.ts`) with a spawn point above its surface and
+optionally the name of a sky and lighting preset (`SKIES` in `src/render/sky.ts`;
+`DEFAULT_SKY` when unset), and selected with `?world=<name>`.
 Shaders that evaluate a world concatenate, in order: the generated block constants
 (`blockConstantsWgsl()` in `src/world/blocks.ts`), `src/sdf/lib.wgsl`, the world
-file (`worldSources()` in `src/sdf/preview.ts`). A world defines:
+file (`worldSources()` in `src/sdf/sources.ts`). A world defines:
 
 ```
 const WORLD_LIPSCHITZ: f32                   // bound on |gradient of world_sdf|, >= 1
@@ -517,6 +540,12 @@ free a slot when its brick scrolls out.
 Level k's slice starts at `level * B^3`, and a brick's cell inside it is `brick mod B`
 per axis, so scrolling the window rewrites one slab rather than moving every brick.
 The march undoes that with the level origin it is given.
+
+Two shaders read this layout: the far field's own march (`src/far/far.wgsl`) and the
+shadow marcher the near field's fragment stage runs against the same buffers
+(`src/far/shadow.wgsl`, bound at group 2 there). The shadow marcher keeps its own copies
+of `brick_entry` and `cell_solid` because it is compiled into a different shader, so a
+change here is a change in both files.
 
 ## Changing a format
 

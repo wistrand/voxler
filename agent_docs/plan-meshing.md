@@ -261,7 +261,7 @@ Options:
 diagonal seams ([gotchas.md](gotchas.md) "AO anisotropy").
 
 Result, CPU half. Baked AO is in the mesher behind an optional input:
-`mesh(chunk, planes, merge, shell)`, where `shell` is a padded 34^3 opacity grid
+`mesh(chunk, planes, options)`, where `options.shell` is a padded 34^3 opacity grid
 holding all 26 neighbors' touching voxels (`src/mesh/ao.ts`: `faceAo`,
 `vertexAo`, `shellFromPlanes`). Faces on the chunk border need the shell's edges
 and corners, so a worker job with baked AO reads 26 neighbors, not 6. AO bytes are
@@ -274,6 +274,13 @@ setups, merged and unmerged; 74 tests pass.
 Shader AO needed nothing new from the mesher: `BinaryMesher.occupancy()` returned
 the X columns, which are the chunk's opacity bitset in voxel order (4 KB). Deleted
 with the rest of the losing path.
+
+Baked block light landed later and works the same way, from a second padded grid
+(`options.light`, `src/mesh/light.ts`): the level of each visible face joins the merge
+key beside its AO byte, so a pool of light under a glowing block breaks its quads into
+steps just as AO breaks them at a crevice. It is
+[plan-living-world.md](plan-living-world.md) phase 4, and it costs the forest about
+13% more quads.
 
 Greedy quad count without and with baked AO:
 

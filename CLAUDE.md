@@ -13,25 +13,28 @@ binary greedy meshing in CPU workers, split into quad clusters, culled on the GP
 (frustum, face direction, two-phase Hi-Z), and drawn with one indirect draw by
 vertex pulling from storage buffers. The far field is sampled from the SDF straight
 into a brickmap clipmap, ray-marched in compute, and composited behind the near
-field.
+field. That same clipmap is what the near field's shadow rays march, so shadows cost
+no shadow map and no second draw of the scene.
 
 ```
  world SDF (WGSL)
   ├─ voxelize (GPU) ──readback──> chunk store ──> mesh (workers) ──> quad arena ──> cull ──> draw ──┐
   │                                    │ edited chunks                                              ├──> frame
   └─ sample bricks (GPU) ──────────────┴──> clipmaps ──> ray march (compute) ───────────────────────┘
+                                             └──> shadow rays, marched by the draw above
 ```
 
 ## Status
 
 The foundation plan is mostly done (all phases landed; a few deferred checks
-remain). SDF generation phases 1-2 (library, worlds, preview, GPU voxelizer) are
-in, and phase 3 streams voxelized chunks into the `ChunkStore` (voxel data phases
-1-2, plus streaming from phase 4); streaming keeps up at sprint speed over terrain
-with no holes. Meshing is done, phases 1-7 (reference mesher, quad codec, coverage harness,
+remain). SDF generation phases 1-4 are in (the WGSL library, world programs, the
+sphere-traced preview, the GPU voxelizer, and SDF-sampled far-field bricks); its
+phase 3 streams voxelized chunks into the `ChunkStore` (voxel data phases 1-2, plus
+streaming from phase 4); streaming keeps up at sprint speed over terrain with no
+holes. Only the optional in-page world editor is left. Meshing is done, phases 1-7 (reference mesher, quad codec, coverage harness,
 binary mesher with greedy merge, quad clusters, baked AO, translucency, the worker
-mesh job, `MeshScheduler`, throughput: a surface chunk's mesh job takes 60-150 us,
-no WASM). Streamed chunks are meshed in workers and drawn by plan-rendering phases
+mesh job, `MeshScheduler`, throughput: a surface chunk's mesh job takes 60-150 us
+without block light, no WASM). Streamed chunks are meshed in workers and drawn by plan-rendering phases
 1-4 (range-allocated GPU arenas, two-phase GPU culling with a Hi-Z pyramid,
 GPU-written indirect draws, baked AO, lighting and fog, block textures, and a
 translucent pass ordered far to near). plan-rendering is done; it stays a plan for
@@ -44,15 +47,21 @@ chunk, so edits survive regeneration; placement, a voxel raycast plus an edit to
 undo and redo bound to the keyboard; and the field stage, where SDF and CSG brushes
 are folded into the world program in the voxelizer, in the SDF preview, and in the
 far-field brick builder.
-The far field is done: a five-level brickmap clipmap with toroidal indirection and a
-shared brick pool, sampled from the world SDF on the GPU a slab at a time as the camera
-scrolls (brushes folded in, no chunks involved), reduced from chunk data in a worker for
-chunks an edit has changed and from the level below for the coarse levels, marched level
-by level in compute at half resolution behind a beam pre-pass, and composited behind the
-near field, which wins every pixel it drew (depth) and every chunk it is drawing (a
-coverage mask). The march costs 0.59 ms p50 at 1080p over the flyover bench. It stays a
-plan file rather than an architecture doc for now, and stays off unless `?far=` asks for
-it: nothing yet decides how far the clipmap should reach for a given machine.
+The far field is done: an eight-level brickmap clipmap with toroidal indirection and a
+shared brick pool, reaching 32,768 voxels, sampled from the world SDF on the GPU a slab
+at a time as the camera scrolls (brushes folded in, no chunks involved), reduced from
+chunk data in a worker for chunks an edit has changed and from the level below for the
+coarse levels, marched level by level in compute at half resolution behind a beam
+pre-pass, and composited behind the near field, which wins every pixel it drew (depth)
+and every chunk it is drawing (a coverage mask). The march costs 0.59 ms p50 at 1080p
+over the flyover bench. It is on by default (`?far=0` turns it off) and stays a plan
+file rather than an architecture doc for now. Its clipmap is also what shadow rays
+march ([plan-living-world.md](agent_docs/plan-living-world.md) phase 5), so turning the
+far field off turns shadows off with it.
+The living world is done: emissive blocks, wind in the vertex stage, the forest world
+program, block light flood filled in the mesh job and baked per quad corner, per-world
+sky and lighting presets (`src/render/sky.ts`) including a night with a moon, and
+shadows marched against the far field's clipmap.
 Main-thread cost per frame is flat in the resident chunk count; GPU cost follows
 what is drawn. Build the plans in this order. Each
 plan tracks its own phases; update the status column when a plan starts or lands.
@@ -66,10 +75,13 @@ plan tracks its own phases; update the status column when a plan starts or lands
 | 5     | [plan-rendering.md](agent_docs/plan-rendering.md)           | arenas, GPU culling, two-phase Hi-Z, indirect draw, shading            | done        |
 | 6     | [plan-far-field.md](agent_docs/plan-far-field.md)           | brickmap clipmap, compute ray march, composite, far-field edits        | done        |
 | 7     | [plan-world-modelling.md](agent_docs/plan-world-modelling.md) | brushes (SDF, CSG, voxel), placement, the edit journal, regeneration | done        |
-| 8     | [plan-living-world.md](agent_docs/plan-living-world.md)     | emissive materials, motion, a fantasy forest world program              | in progress |
+| 8     | [plan-living-world.md](agent_docs/plan-living-world.md)     | emissive materials, motion, a fantasy forest world, block light, night and shadows | done |
 
-The renderer plans are built; plan-living-world is where the work goes now, and it is
-about what the engine draws rather than how fast.
+The renderer plans are built and plan-living-world has landed: what the engine draws
+rather than how fast it draws it. What it left open is in that plan's phases 4 and 5 (the
+far field has no block light and no shadows, and every light in the world shares one
+colour) and in the grove bench, which no longer holds 120 Hz now that it walks through
+the wood rather than under it.
 
 Plans interleave: plan-sdf-generation phases 1-2 need only the foundation; its
 phase 3 needs plan-voxel-data phases 1-2, and its phase 4 needs plan-far-field
@@ -85,7 +97,7 @@ Directories under `src/` are created by the phase that first puts a file in them
 today `src/gpu/`, `src/render/`, `src/camera/`, `src/util/`, `src/debug/`,
 `src/workers/`, `src/bench/`, `src/sdf/`, `src/worlds/`, `src/mesh/`, `src/brush/`, `src/far/`, and `src/world/`
 (`coords.ts`, `blocks.ts`, `chunk.ts`, `keys.ts`, `chunk-table.ts`, `arena.ts`,
-`store.ts`, `streaming.ts`, `mesh-scheduler.ts`) exist.
+`store.ts`, `streaming.ts`, `raycast.ts`, `mesh-scheduler.ts`) exist.
 
 | Path             | Role                                                           |
 | ---------------- | -------------------------------------------------------------- |
@@ -96,9 +108,9 @@ today `src/gpu/`, `src/render/`, `src/camera/`, `src/util/`, `src/debug/`,
 | `src/sdf/`       | WGSL SDF library, GPU voxelizer, sphere-traced preview         |
 | `src/worlds/`    | world programs (`<name>.wgsl`, selected with `?world=`)        |
 | `src/brush/`     | brush records and op lists, the CPU and WGSL field folds, the voxel stage, the instance store, the edit tool |
-| `src/mesh/`      | binary greedy mesher, reference mesher, clusters, mesh job (worker-side, pure) |
-| `src/render/`    | arenas, cull and draw passes, Hi-Z, shading, block textures     |
-| `src/far/`       | brick builder, clipmaps, far-field march and composite         |
+| `src/mesh/`      | binary greedy mesher, reference mesher, clusters, baked AO and block light, mesh job (worker-side, pure) |
+| `src/render/`    | arenas, cull and draw passes, Hi-Z, shading, sky presets, block textures |
+| `src/far/`       | brick builder, clipmaps, far-field march and composite, shadow rays |
 | `src/workers/`   | `WorkerPool`, job queue, buffer pool, the worker, job handlers |
 | `src/util/`      | math, ring buffers, timers                                     |
 | `src/debug/`     | overlay (caps, stats, camera, errors) and frame `Stats`        |
@@ -164,14 +176,18 @@ order; `?nearMB=n`
 sizes the near-field quad arena (default 64); `?ao=0` meshes and draws without
 baked AO (the phase 5 A/B; it also drops the mesh job back to 6 neighbors); `?tex=0`
 draws flat block colors instead of sampling the block textures; `?glow=0` drops block
-emission and `?wind=0` holds swaying blocks still; `?far=on|steps|bricks|levels`
-turns the far field on and picks its debug view (F queues every clipmap level again);
+emission, `?wind=0` holds swaying blocks still, `?light=0` meshes and draws without block
+light and `?shadow=0` stops marching shadow rays; `?sky=<day|night>` overrides the
+world's own sky and lighting preset (`src/render/sky.ts`); `?far=0` turns the far
+field off (it is on by default) and `?far=steps|bricks|levels` picks a debug view
+(F queues every clipmap level again);
 `?farLevels=n` sets the level count, `?farFirst=k` the finest level's cell size
 (2^k voxels), `?farBricks=n` the brick pool capacity, `?farSlabs=n` the brick slabs
 sampled per frame, `?farScale=0.1..1` the march resolution as a fraction of the frame
 and `?farBeam=0` turns the beam pre-pass off; `?farCheck` compares the sampled bricks
 against the same region reduced from resident chunk data; `?preview=1`
-forces the SDF preview on (it starts off while meshes are drawn). Look by dragging
+forces the SDF preview on (it starts off while meshes are drawn, and its pipelines are
+built the first time it is switched on, not at startup). Look by dragging
 (mouse or touch); the wheel flies forward and back, and +/- change the speed. Keys:
 F2 overlay,
 P SDF preview, G grid, M meshes, F rebuild far-field bricks; editing: E place, Q remove, R rotate (Shift+R the
@@ -190,7 +206,10 @@ Benchmarks: `?bench=<flyover|spin|teleport|cave|grove>&runs=n` on the dev server
 run to `bench/results/<scene>.<UTC timestamp>.<browser>.json` (dated on purpose;
 never rename or edit them). Compare CPU and GPU times, not the vsync-capped frame
 interval. A perf claim cites two result files, before and after. Scene paths are
-offsets from the world's spawn point; `stream.holes` in each result counts chunks
+offsets from the world's spawn point, so always check the spawn still stands on the
+ground after changing a world's terrain: a stale one runs the whole scene underground
+and every number it produces is for an empty frame
+([gotchas.md](agent_docs/gotchas.md)). `stream.holes` in each result counts chunks
 near the camera that should be resident but weren't (0 means streaming kept up).
 
 ## Docs
@@ -237,7 +256,12 @@ near the camera that should be resident but weren't (0 means streaming kept up).
   ([gotchas.md](agent_docs/gotchas.md) "A shared arena block can be reused under a
   running worker").
 - Binary formats have one owner, [design-formats.md](agent_docs/design-formats.md).
-  Change an encoder and its decoder (worker and WGSL) in the same change.
+  Change an encoder and its decoder (worker and WGSL) in the same change. The brick and
+  clipmap layout has two WGSL readers, `src/far/far.wgsl` and `src/far/shadow.wgsl`;
+  a change to it is a change in both.
+- Baked per-corner values (AO, block light) join the mesher's merge key. Adding one
+  fragments quads wherever it varies, which is a memory and draw cost, not just a
+  shading one; measure the quad count, not only the frame time.
 - Core WebGPU at default limits is the baseline. Optional features
   (`timestamp-query`, `subgroups`, `shader-f16`, ...) and raised limits are read from
   `caps`, and the engine has a working path without them.
@@ -251,6 +275,8 @@ near the camera that should be resident but weren't (0 means streaming kept up).
 - The reference mesher is never deleted. Greedy mesher output must match it in
   face coverage.
 - Occlusion culling stays two-phase. Single-phase Hi-Z shows holes on fast turns.
+- Shadow rays read the far field's clipmap, so shadows exist only where it is built:
+  `?far=0` turns them off with it, and nothing outside the clipmap's window casts one.
 - A change presented as a performance improvement includes before and after numbers
   from the bench harness.
 
@@ -263,37 +289,45 @@ in [research-webgpu-support.md](agent_docs/research-webgpu-support.md).
 
 ## Performance targets
 
-Measured on the dev machine (Intel Arc B390 iGPU, Chrome 152 on Linux) at 1920x1080
-with everything on: near field, far field, textures, baked AO, translucency. Dated
-2026-09-12, results in `bench/results/*.20260912T1630*` and `flyover.20260912T163338Z`. Never
-compare the vsync-capped `interval`; compare CPU frame time and the GPU passes. Rerun
-the four scenes after any change that claims a frame-time effect.
+Measured on the dev machine (Intel Arc B390 iGPU, Chrome 152 on Linux) at 1920x1080 with
+everything on: near field, far field, textures, baked AO, block light, shadows,
+translucency. Dated 2026-09-12, results in `bench/results/*.20260912T183*`. Never compare
+the vsync-capped `interval`; compare CPU frame time and the GPU passes. Rerun the four
+terrain scenes after any change that claims a frame-time effect, and `grove` as well for
+anything that touches the forest.
 
 | Metric                                     | Target                                  | Measured                                        |
 | ------------------------------------------ | --------------------------------------- | ----------------------------------------------- |
-| Frame time, dev machine (Arc B390, 120 Hz) | under 8.3 ms (hold 120 Hz)              | held in all four scenes (interval p99 8.34)     |
-| GPU per frame, flyover                     | under 8.3 ms                            | 2.9 ms (sum of pass p50s); spin 3.7, cave 3.5   |
+| Frame time, dev machine (Arc B390, 120 Hz) | under 8.3 ms (hold 120 Hz)              | held in the four terrain scenes (interval p99 8.34); the grove misses about 100 frames of 1400 |
+| GPU per frame, flyover                     | under 8.3 ms                            | 4.0 ms (sum of pass p50s); spin 4.5, cave 3.8, teleport 2.5 |
 | Frame time, integrated GPU (M1, Iris Xe)   | under 16.7 ms                           | unmeasured, no hardware                         |
 | Frame time, discrete GPU                   | under 7 ms                              | unmeasured, no hardware                         |
-| Main-thread CPU per frame                  | under 2 ms, flat in resident chunks     | p50 0.35-1.58; p99 0.73-4.86, over in scenes that stream hard |
+| Main-thread CPU per frame                  | under 2 ms, flat in resident chunks     | p50 0.34-1.69; p99 0.70-5.26, over in scenes that stream hard |
 | Near-field meshed radius                   | 16 chunks (512 voxels) horizontally     | as configured (`?streamRadius`)                 |
-| Far-field view distance                    | 32k voxels                              | 32,768 (8 clipmap levels), 21.7 MiB of bricks   |
-| Mesh throughput, surface chunk             | under 0.5 ms per chunk per worker       | 60-150 us (plan-meshing phase 7)                |
-| Mesh memory                                | 8 bytes per quad plus cluster padding   | 8.3% padding over the flyover                   |
-| Streaming                                  | no visible holes at sprint flight speed | `stream.holes` 0 in flyover, spin and cave      |
+| Far-field view distance                    | 32k voxels                              | 32,768 (8 clipmap levels); 21.7 MiB of bricks in terrain, 7.0 in the forest |
+| Mesh throughput, surface chunk             | under 0.5 ms per chunk per worker       | 60-150 us without block light (plan-meshing phase 7) |
+| Mesh memory                                | 8 bytes per quad plus cluster padding   | 10.4% padding over the flyover                  |
+| Streaming                                  | no visible holes at sprint flight speed | `stream.holes` 0 in all five scenes             |
 
-Where the frame goes at 1080p, flyover p50: far-field march 0.85 ms, far-field slab
-sampling 0.66, near-field opaque draw 0.66, translucent cull 0.33, far-field beam 0.13,
-Hi-Z 0.13, everything else under 0.07. The flyover run that holds the whole frame
-(interval p50 through max all 8.34, no missed frames) is `flyover.20260912T163338Z`. The empty-scene baseline is CPU 0.12 ms p50, GPU 0.25
-(plan-foundation phase 6).
+Where the frame goes at 1080p, flyover p50: near-field opaque draw 1.90 ms (1.2 of that
+is shadow rays, measured), far-field march 0.79, far-field slab sampling 0.59,
+translucent cull 0.26, Hi-Z 0.13, everything else under 0.07. The empty-scene baseline is CPU 0.12 ms p50,
+GPU 0.25 (plan-foundation phase 6).
 
-Two numbers are over target and both are the same thing: CPU frame p99 is 3.6 ms in the
-flyover and 4.9 in the teleport, against a 2 ms target. That is the main thread applying
-mesh results and uploading them in bursts, not steady-state work; p50 is 0.8 and 1.6.
-The teleport also shows `stream.holes` 147 for one frame after each jump, which is the
-near field having nothing yet: the far field draws through it, so what it costs is
-detail for a few frames, not a hole in the world.
+Three things are over target, and each is recorded where it belongs rather than smoothed
+away here:
+
+- **CPU frame p99**, 3.3 ms in the flyover and 5.3 in the teleport against a 2 ms target.
+  That is the main thread applying mesh results and uploading them in bursts, not
+  steady-state work; p50 is 0.7 and 1.6.
+- **The grove bench no longer holds 120 Hz.** Its far-field slab sampling is 6-7 ms p50
+  in a world an order richer than terrain, and `?farSlabs=1` halves the p99 for a slower
+  catch-up. The earlier runs that did hold it were walking underground
+  ([gotchas.md](agent_docs/gotchas.md) "The grove bench walked 44 voxels underground").
+- **Shadows cost about 1.2 ms** of the near-field draw at 1080p: flyover `gpu.near.a`
+  0.72 ms p50 with `?shadow=0` and 1.90 without it
+  (`flyover.20260912T184002Z` against `flyover.20260912T183537Z`). Whether that is worth
+  paying is a per-machine call the engine does not make yet.
 
 ## Conventions
 
@@ -302,9 +336,11 @@ detail for a few frames, not a hole in the world.
   written in-repo to keep control of allocation and bundle size.
 - WGSL shaders are `.wgsl` files imported with `with { type: "text" }`. Every GPU
   object gets a `label`.
-- Surfaces are lit and fogged by `surface_light()` and `apply_fog()` in
-  `src/render/shading.wgsl`; never write a second lighting model, or the near
-  field, the preview, and the far field drift apart.
+- Surfaces are lit and fogged by `surface_light()` (or `surface_light_shadowed()`,
+  which is the same light with the direct term scaled) and `apply_fog()` in
+  `src/render/shading.wgsl`, over constants a world's sky preset generates
+  (`src/render/sky.ts`); never write a second lighting model, or the near field, the
+  preview, and the far field drift apart.
 - Compile shaders with `compileShader()` and build pipelines with
   `createRenderPipeline()` from `src/gpu/shader.ts`, so failures reach the overlay.
   Pass `camera.wgsl` as the first source for any shader that reads the camera;
@@ -357,7 +393,15 @@ detail for a few frames, not a hole in the world.
   `BLOCK_<NAME>`. A block that glows carries an `emission` colour, added to the lit
   surface by the near field, the preview and the far field alike; keep it small enough
   that lit plus emission stays under 1, because nothing tonemaps and the block would
-  clip to white.
+  clip to white. A block that lights its neighbours carries `light`, a level 0 to
+  `LIGHT_MAX` that falls by one a voxel and is flood filled in the mesh job and baked
+  into the quads around it.
+- A world names a sky and lighting preset from `SKIES` (`src/render/sky.ts`); unset
+  means `DEFAULT_SKY`. The preset is generated into WGSL and prepended to every shader
+  that lights or fogs a surface, so it is the one lighting model with different numbers
+  in it, never a second model. Never write `smoothstep(a, a, x)` against generated
+  constants: WGSL rejects equal ends at compile time, whatever branch guards the call
+  ([gotchas.md](agent_docs/gotchas.md)).
 - Use explicit bind group layouts for shared resources, not `layout: "auto"`.
 - Terminology: *voxel* (one cell), *block id* (its `u16` type), *chunk* (32^3
   voxels), *quad* (one packed greedy face), *face group* (a chunk's quads for one

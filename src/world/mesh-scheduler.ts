@@ -56,6 +56,7 @@ export interface MeshSchedulerOptions {
   clusterQuads: number; // cluster size for every job (plan-rendering phase 1 sweep)
   clusterOrder: number; // quad order within a cluster (plan-rendering phase 4)
   ao: boolean; // bake AO into the meshes (?ao); costs the 20 extra neighbors
+  blockLight: boolean; // bake block light into the meshes (?light); needs ao's neighbors
 }
 
 export const DEFAULT_MESH_OPTIONS: MeshSchedulerOptions = {
@@ -65,6 +66,7 @@ export const DEFAULT_MESH_OPTIONS: MeshSchedulerOptions = {
   clusterQuads: CLUSTER_QUADS,
   clusterOrder: ORDER_EMISSION,
   ao: true,
+  blockLight: true,
 };
 
 export interface MeshStats {
@@ -412,6 +414,7 @@ export class MeshScheduler {
         clusterQuads: this.options.clusterQuads,
         clusterOrder: this.options.clusterOrder,
         ao: this.options.ao,
+        light: this.options.blockLight,
       };
     } else {
       // Copy path: this job's blocks into one pooled buffer, transferred.
@@ -435,6 +438,7 @@ export class MeshScheduler {
         clusterQuads: this.options.clusterQuads,
         clusterOrder: this.options.clusterOrder,
         ao: this.options.ao,
+        light: this.options.blockLight,
       };
       transfer = [buffer];
     }

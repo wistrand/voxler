@@ -45,11 +45,15 @@ const SOIL = 4.0 * S; // dirt above stone
 // it is still a voxel or two across; the canopies carry the forest out to about a
 // thousand voxels, past which fog has most of it anyway.
 const UNDERGROWTH_FOOTPRINT = 1.2 * S;
-const TREE_FOOTPRINT = 3.0 * S;
+// Trees survive to the far field's second level and no further. Three species with
+// carved canopies cost several times what the first cut did, and the far field samples
+// this world once per level: at 3.0 * S the trees reached the third level and the grove
+// bench's far build ran past the frame budget.
+const TREE_FOOTPRINT = 1.6 * S;
 
 // Lattice periods have to be whole voxels, so these are the scaled sizes rounded.
 const TREE_CELL = vec3i(74, 1 << 20, 74);
-const SHROOM_CELL = vec3i(30, 1 << 20, 30);
+const SHROOM_CELL = vec3i(44, 1 << 20, 44);
 // Giants stand on their own coarse lattice. As a rare variant of the small ones they
 // shared the small lattice, and neighbouring caps merged into one pink plateau with
 // stems poking through it.
@@ -60,6 +64,30 @@ const ROCK_CELL = vec3i(63, 1 << 20, 63);
 // A hash cell's three random numbers in [0, 1).
 fn cell_random(id: vec3i, salt: u32) -> vec3f {
   return vec3f(hash3(id + vec3i(i32(salt) * 7919, 0, 0), world_seed)) * (1.0 / 4294967296.0);
+}
+
+// Where in its cell an item stands, in voxels from the cell's centre. The random that
+// decides whether a cell has an item at all is r.x, so the jitter has to come from a
+// different draw: reusing it puts every accepted item on the same side of its cell,
+// which reads as a grid however wide the jitter is. `amount` is the fraction of the
+// cell it can wander over, and jitter plus the item's own reach has to stay inside one
+// cell or the 3x3 neighbourhood the lookups walk would miss it.
+fn cell_jitter(id: vec3i, salt: u32, cell: vec3i, amount: f32) -> vec2f {
+  let j = cell_random(id, salt);
+  return (j.xz - 0.5) * vec2f(f32(cell.x), f32(cell.z)) * amount;
+}
+
+// How thick the undergrowth is at a cell, 0 in a bare patch and 1 in a thicket, varying
+// over a few hundred voxels. Sampled at the cell's centre for the same reason
+// grove_density is. A fixed hit rate per cell spreads plants evenly over the floor,
+// which reads as a pattern as much as a lattice does; clumping them leaves bare ground
+// between the patches.
+// One octave, not two: this runs for every cell of three lattices at every sample the
+// far field takes, and a second octave cost it 4 ms a frame in the grove bench for a
+// pattern nothing can see at that scale.
+fn patch_density(id: vec3i, cell: vec3i, k: u32) -> f32 {
+  let centre = WorldPoint(id * cell + cell / 2, vec3f(0.0));
+  return smoothstep(-0.4, 0.4, fbm2(centre, k, 1u, 0.5));
 }
 
 // Distance from the stream's centre line, in voxels. The line is where a ridged noise
@@ -126,10 +154,11 @@ fn tree_species(r: f32, ground: f32) -> u32 {
   return TREE_BROADLEAF;
 }
 
-// Stable numbers in [0, 1) for the many small choices inside one tree (which way a limb
-// points, how big a bite out of the canopy is). Hashing a cell per choice would be
-// truer random; these only have to look unrelated and stay put for the tree.
-fn tree_rand(seed: f32, i: u32) -> f32 {
+// Stable numbers in [0, 1) for the many small choices inside one object (which way a
+// limb points, how big a bite out of a canopy is, where in a clump a mushroom stands).
+// Hashing a cell per choice would be truer random; these only have to look unrelated to
+// each other and stay put for the object.
+fn sub_rand(seed: f32, i: u32) -> f32 {
   return fract(sin(seed * 91.7 + f32(i) * 13.31) * 43758.5453);
 }
 
@@ -147,12 +176,12 @@ fn sd_cone_y(p: vec3f, h: f32, r: f32) -> f32 {
 fn canopy_bites(leaves: f32, local: vec3f, centre: vec3f, cr: f32, seed: f32, count: u32, scale: f32) -> f32 {
   var d = leaves;
   for (var i = 0u; i < count; i++) {
-    let a = tree_rand(seed, i * 3u) * 6.2832;
-    let t = tree_rand(seed, i * 3u + 1u);
+    let a = sub_rand(seed, i * 3u) * 6.2832;
+    let t = sub_rand(seed, i * 3u + 1u);
     let dir = normalize(vec3f(cos(a), (t - 0.4) * 1.4, sin(a)));
     // Out near the rim, so a bite takes a notch out of the silhouette rather than
     // hollowing the middle where nothing would ever see it.
-    let at = centre + dir * cr * (0.70 + 0.55 * tree_rand(seed, i * 3u + 2u));
+    let at = centre + dir * cr * (0.70 + 0.55 * sub_rand(seed, i * 3u + 2u));
     d = op_subtract(d, sd_sphere(local - at, cr * scale * (0.6 + 0.8 * t)));
   }
   return d;
@@ -169,7 +198,7 @@ fn conifer_cr(r: vec3f) -> f32 {
 }
 
 fn ancient_reach(r: vec3f) -> f32 {
-  return (5.0 + r.y * 3.0) * S;
+  return (4.0 + r.y * 2.5) * S;
 }
 
 // Horizontal reach of a tree's crown (x) and how far its leaves rise above the top of
@@ -220,10 +249,10 @@ fn broadleaf_shape(local: vec3f, r: vec3f, r2: vec3f, tall: f32) -> vec2f {
   let crown = top + vec3f(0.0, 1.2 * S, 0.0);
   var leaves = sd_ellipsoid(local - crown, vec3f(cr * 0.75, cr * 0.55, cr * 0.75));
   for (var i = 0u; i < 6u; i++) {
-    let a = (tree_rand(r2.x, 40u + i) + f32(i) / 6.0) * 6.2832;
-    let up = (tree_rand(r2.y, 50u + i) - 0.35) * cr * 1.0;
-    let off = vec3f(cos(a), 0.0, sin(a)) * cr * (0.55 + 0.45 * tree_rand(r2.z, 60u + i)) + vec3f(0.0, up, 0.0);
-    let lobe = sd_sphere(local - crown - off, cr * (0.42 + 0.28 * tree_rand(r2.x, 70u + i)));
+    let a = (sub_rand(r2.x, 40u + i) + f32(i) / 6.0) * 6.2832;
+    let up = (sub_rand(r2.y, 50u + i) - 0.35) * cr * 1.0;
+    let off = vec3f(cos(a), 0.0, sin(a)) * cr * (0.55 + 0.45 * sub_rand(r2.z, 60u + i)) + vec3f(0.0, up, 0.0);
+    let lobe = sd_sphere(local - crown - off, cr * (0.42 + 0.28 * sub_rand(r2.x, 70u + i)));
     leaves = op_smin(leaves, lobe, 0.8 * S);
   }
   return pick(s, vec2f(canopy_bites(leaves, local, crown, cr, r2.y, 7u, 0.40), f32(BLOCK_LEAVES)));
@@ -250,8 +279,8 @@ fn conifer_shape(local: vec3f, r: vec3f, r2: vec3f, tall: f32) -> vec2f {
   for (var i = 0u; i < tiers; i++) {
     let f = f32(i) / f32(tiers - 1u);
     let y = tall * (0.25 + 0.72 * f);
-    let rw = cr * (1.0 - 0.78 * f) * (0.80 + 0.40 * tree_rand(r2.x, i));
-    let hw = tall * (0.15 + 0.06 * tree_rand(r2.z, i));
+    let rw = cr * (1.0 - 0.78 * f) * (0.80 + 0.40 * sub_rand(r2.x, i));
+    let hw = tall * (0.15 + 0.06 * sub_rand(r2.z, i));
     let tier = sd_cone_y(local - vec3f(0.0, y, 0.0), hw, rw);
     leaves = min(leaves, canopy_bites(tier, local, vec3f(0.0, y + hw * 0.35, 0.0), rw, r2.y + f32(i) * 0.7, 3u, 0.24));
   }
@@ -280,13 +309,13 @@ fn ancient_shape(local: vec3f, r: vec3f, r2: vec3f, tall: f32) -> vec2f {
   for (var i = 0u; i < limbs; i++) {
     let a = (r.z + f32(i) / f32(limbs)) * 6.2832;
     let dir = vec3f(cos(a), 0.0, sin(a));
-    let len = reach * (0.70 + 0.45 * tree_rand(r2.x, i));
-    let rise = tall * (0.35 + 0.30 * tree_rand(r2.y, i));
+    let len = reach * (0.70 + 0.45 * sub_rand(r2.x, i));
+    let rise = tall * (0.35 + 0.30 * sub_rand(r2.y, i));
     let base = vec3f(0.0, fork * 0.9, 0.0);
     let tip = base + dir * len + vec3f(0.0, rise, 0.0);
     let mid = base + dir * len * 0.45 + vec3f(0.0, rise * 0.8, 0.0);
     s = pick(s, vec2f(sd_bezier_tube(local, base, mid, tip, trunk_r * 0.8, 0.4 * S), f32(BLOCK_BARK)));
-    let lobe_r = reach * (0.32 + 0.16 * tree_rand(r2.z, i));
+    let lobe_r = reach * (0.32 + 0.16 * sub_rand(r2.z, i));
     let centre = tip + vec3f(0.0, lobe_r * 0.35, 0.0);
     var lobe = sd_ellipsoid(local - centre, vec3f(lobe_r, lobe_r * 0.7, lobe_r));
     lobe = canopy_bites(lobe, local, centre, lobe_r, r2.x + f32(i) * 1.7, 4u, 0.34);
@@ -347,7 +376,7 @@ fn trees(p: WorldPoint, ground: f32) -> vec2f {
       // Jitter within the cell, and stand the tree on the ground under its own trunk.
       // The jitter plus the widest crown has to stay inside one cell, or the 3x3
       // neighbourhood above would miss a tree that reaches into this one.
-      let jitter = (r.xz - 0.5) * f32(TREE_CELL.x) * 0.6;
+      let jitter = cell_jitter(id, 7u, TREE_CELL, 0.5);
       local.x -= jitter.x;
       local.z -= jitter.y;
       local.y = y - ground;
@@ -367,8 +396,61 @@ fn trees(p: WorldPoint, ground: f32) -> vec2f {
   return best;
 }
 
-// Mushrooms: clusters of small glowing caps, and the occasional giant one. The colour
-// is the cell's, so a cluster shares a species.
+// A mushroom cap, with its underside at y = 0 of `local` and radius `r`. `dome` is how
+// tall the dome is as a fraction of the radius.
+//
+// Three things make a lump of voxels read as a cap: the dome is cut off under its
+// equator, so it is a cap and not a ball on a stick; a thin lip runs a little wider than
+// the dome, which is the overhang the eye reads as a mushroom from any angle; and the
+// rim tapers rather than ending in a wall.
+fn cap_shape(local: vec3f, r: f32, dome: f32) -> f32 {
+  let d = max(sd_ellipsoid(local, vec3f(r, r * dome, r)), -local.y - r * 0.16);
+  let lip = max(sd_ellipsoid(local, vec3f(r * 1.08, r * 0.26, r * 1.08)), -local.y - r * 0.10);
+  return op_smin(d, lip, r * 0.22);
+}
+
+// Which of the four glowing caps a cell grows. The colour is the cell's, so every
+// mushroom in one clump is the same species.
+fn cap_colour(t: f32) -> f32 {
+  let species = u32(t * 4.0) % 4u;
+  if (species == 1u) {
+    return f32(BLOCK_GLOWCAP_VIOLET);
+  }
+  if (species == 2u) {
+    return f32(BLOCK_GLOWCAP_AMBER);
+  }
+  if (species == 3u) {
+    return f32(BLOCK_GLOWCAP_ROSE);
+  }
+  return f32(BLOCK_GLOWCAP);
+}
+
+// One small mushroom standing at `local`: a stem that flares at the foot and a cap.
+fn shroom_shape(local: vec3f, stem_h: f32, cap_r: f32, lean: vec2f, colour: f32) -> vec2f {
+  let top = vec3f(lean.x, stem_h, lean.y);
+  let stem = sd_bezier_tube(
+    local,
+    vec3f(0.0),
+    vec3f(lean.x * 0.35, stem_h * 0.55, lean.y * 0.35),
+    top,
+    0.62 * S,
+    0.38 * S,
+  );
+  let s = vec2f(stem, f32(BLOCK_SHROOMSTEM));
+  return pick(s, vec2f(cap_shape(local - top, cap_r, 0.78), colour));
+}
+
+// How far one cluster's mushrooms wander from the cell's spot, and how big the largest
+// of them gets. The bound below is built from these, so a mushroom can never grow past
+// what the bound covers.
+const SHROOM_SPREAD = 2.4 * S;
+const SHROOM_STEM_MAX = 4.8 * S;
+const SHROOM_CAP_MAX = 1.8 * S;
+const SHROOM_LEAN_MAX = 0.35 * S;
+const SHROOM_CLUSTER = 3u;
+
+// Mushrooms: clumps of small glowing caps, and the occasional giant one. The colour is
+// the cell's, so a clump shares a species.
 fn mushrooms(p: WorldPoint, ground: f32) -> vec2f {
   let y = f32(p.cell.y) + p.frac.y;
   var best = vec2f(1e9, 0.0);
@@ -378,40 +460,52 @@ fn mushrooms(p: WorldPoint, ground: f32) -> vec2f {
       let q = wp_offset(p, -vec3f(shift));
       let id = wp_repeat_id(q, SHROOM_CELL);
       let r = cell_random(id, 2u);
-      if (r.x > 0.42) {
+      // The density costs a noise sample, so reject on the cell's own random first:
+      // the cells past the gate's ceiling never need it.
+      if (r.x > 0.22) {
+        continue;
+      }
+      if (r.x > 0.02 + 0.20 * patch_density(id, SHROOM_CELL, 8u)) {
         continue;
       }
       var local = wp_repeat(q, SHROOM_CELL);
-      local.x -= (r.x - 0.5) * f32(SHROOM_CELL.x) * 0.6;
-      local.z -= (r.z - 0.5) * f32(SHROOM_CELL.z) * 0.6;
+      let jitter = cell_jitter(id, 8u, SHROOM_CELL, 0.9);
+      local.x -= jitter.x;
+      local.z -= jitter.y;
       local.y = y - ground;
-      let stem_h = (0.9 + r.z * 0.8) * S;
-      let cap_r = (1.1 + r.y * 0.9) * S;
-      let bound = sd_cylinder(local - vec3f(0.0, stem_h * 0.5, 0.0), stem_h + cap_r, cap_r + 0.5 * S);
+      // One bound for the whole clump, built from the constants above so no mushroom in
+      // it can grow past what the bound covers. It reaches below the ground too: the
+      // stem's foot flares, and a bound that does not contain the shape is not an
+      // underestimate of the distance to it.
+      let reach = SHROOM_SPREAD + SHROOM_LEAN_MAX + SHROOM_CAP_MAX * 1.15;
+      let tall = SHROOM_STEM_MAX + SHROOM_CAP_MAX + 0.8 * S;
+      let bound = sd_cylinder(local - vec3f(0.0, tall * 0.5 - 0.8 * S, 0.0), tall * 0.5, reach);
       if (bound > 0.75) {
         best = select(best, vec2f(bound, f32(BLOCK_SHROOMSTEM)), bound < best.x);
         continue;
       }
-      let stem = sd_capsule(local, vec3f(0.0), vec3f(0.0, stem_h, 0.0), 0.35 * S);
-      var s = vec2f(stem, f32(BLOCK_SHROOMSTEM));
-      // The cap: a squashed ellipsoid with its underside cut flat.
-      let cap = op_subtract(
-        sd_ellipsoid(local - vec3f(0.0, stem_h, 0.0), vec3f(cap_r, cap_r * 0.7, cap_r)),
-        -(local.y - stem_h + cap_r * 0.35),
-      );
-      let species = u32(r.y * 4.0) % 4u;
-      var id_cap = f32(BLOCK_GLOWCAP);
-      if (species == 1u) { id_cap = f32(BLOCK_GLOWCAP_VIOLET); }
-      if (species == 2u) { id_cap = f32(BLOCK_GLOWCAP_AMBER); }
-      if (species == 3u) { id_cap = f32(BLOCK_GLOWCAP_ROSE); }
-      s = pick(s, vec2f(cap, id_cap));
-      best = select(best, s, s.x < best.x);
+      let colour = cap_colour(r.y);
+      // A clump, not one: mushrooms come up in groups, and three of different heights
+      // around one spot read as a clump where a single stalk reads as a marker pin.
+      // One to three to a clump: every clump the same size is its own kind of pattern.
+      let count = 1u + u32(r.z * f32(SHROOM_CLUSTER));
+      for (var k = 0u; k < min(count, SHROOM_CLUSTER); k++) {
+        let a = (sub_rand(r.y, k) + f32(k) / f32(SHROOM_CLUSTER)) * 6.2832;
+        let away = SHROOM_SPREAD * (0.25 + 0.75 * sub_rand(r.z, k)) * f32(min(k, 1u));
+        let at = local - vec3f(cos(a) * away, 0.0, sin(a) * away);
+        let size = 0.45 + 0.55 * sub_rand(r.x, k + 7u);
+        let stem_h = SHROOM_STEM_MAX * (0.35 + 0.65 * size);
+        let cap_r = SHROOM_CAP_MAX * (0.45 + 0.55 * size);
+        let lean = vec2f(cos(a), sin(a)) * (SHROOM_LEAN_MAX * sub_rand(r.y, k + 13u));
+        let s = shroom_shape(at, stem_h, cap_r, lean, colour);
+        best = select(best, s, s.x < best.x);
+      }
     }
   }
   return best;
 }
 
-// The giants: one to a 53-voxel cell, tall enough to stand clear of the undergrowth and
+// The giants: one to a coarse cell, tall enough to stand clear of the undergrowth and
 // far enough apart that two caps never meet.
 fn giants(p: WorldPoint, ground: f32) -> vec2f {
   let y = f32(p.cell.y) + p.frac.y;
@@ -422,40 +516,38 @@ fn giants(p: WorldPoint, ground: f32) -> vec2f {
       let q = wp_offset(p, -vec3f(shift));
       let id = wp_repeat_id(q, GIANT_CELL);
       let r = cell_random(id, 5u);
-      if (r.x > 0.6) {
+      if (r.x > 0.42) {
         continue;
       }
       var local = wp_repeat(q, GIANT_CELL);
-      local.x -= (r.y - 0.5) * f32(GIANT_CELL.x) * 0.5;
-      local.z -= (r.z - 0.5) * f32(GIANT_CELL.z) * 0.5;
+      let jitter = cell_jitter(id, 9u, GIANT_CELL, 0.7);
+      local.x -= jitter.x;
+      local.z -= jitter.y;
       local.y = y - ground;
       let stem_h = (6.0 + r.z * 7.0) * S;
-      let cap_r = (4.0 + r.y * 4.0) * S;
-      let bound = sd_cylinder(local - vec3f(0.0, stem_h * 0.5, 0.0), stem_h + cap_r, cap_r + 0.5 * S);
+      let cap_r = (3.5 + r.y * 3.5) * S;
+      let lean = (cell_random(id, 12u).xz - 0.5) * stem_h * 0.22;
+      let bound = sd_cylinder(
+        local - vec3f(0.0, (stem_h + cap_r) * 0.5, 0.0),
+        (stem_h + cap_r) * 0.5 + 0.5 * S,
+        cap_r * 1.15 + length(lean),
+      );
       if (bound > 0.75) {
         best = select(best, vec2f(bound, f32(BLOCK_SHROOMSTEM)), bound < best.x);
         continue;
       }
-      // A stem that widens at the foot, and a cap with a lip that hangs past it.
+      // A stem that widens at the foot and curves as it rises, and a domed cap.
+      let top = vec3f(lean.x, stem_h, lean.y);
       let stem = sd_bezier_tube(
         local,
         vec3f(0.0),
-        vec3f(0.0, stem_h * 0.5, 0.0),
-        vec3f(0.0, stem_h, 0.0),
-        1.5 * S,
-        0.8 * S,
+        vec3f(lean.x * 0.2, stem_h * 0.55, lean.y * 0.2),
+        top,
+        1.6 * S,
+        0.75 * S,
       );
       var s = vec2f(stem, f32(BLOCK_SHROOMSTEM));
-      let cap = op_subtract(
-        sd_ellipsoid(local - vec3f(0.0, stem_h, 0.0), vec3f(cap_r, cap_r * 0.55, cap_r)),
-        -(local.y - stem_h + cap_r * 0.2),
-      );
-      let species = u32(r.z * 4.0) % 4u;
-      var id_cap = f32(BLOCK_GLOWCAP);
-      if (species == 1u) { id_cap = f32(BLOCK_GLOWCAP_VIOLET); }
-      if (species == 2u) { id_cap = f32(BLOCK_GLOWCAP_AMBER); }
-      if (species == 3u) { id_cap = f32(BLOCK_GLOWCAP_ROSE); }
-      s = pick(s, vec2f(cap, id_cap));
+      s = pick(s, vec2f(cap_shape(local - top, cap_r, 0.62), cap_colour(r.z)));
       best = select(best, s, s.x < best.x);
     }
   }
@@ -472,12 +564,18 @@ fn ferns(p: WorldPoint, ground: f32) -> vec2f {
       let q = wp_offset(p, -vec3f(shift));
       let id = wp_repeat_id(q, FERN_CELL);
       let r = cell_random(id, 3u);
-      if (r.x > 0.5) {
+      // The density costs a noise sample, so reject on the cell's own random first:
+      // the cells past the gate's ceiling never need it.
+      if (r.x > 0.80) {
+        continue;
+      }
+      if (r.x > 0.15 + 0.65 * patch_density(id, FERN_CELL, 7u)) {
         continue;
       }
       var local = wp_repeat(q, FERN_CELL);
-      local.x -= (r.y - 0.5) * f32(FERN_CELL.x) * 0.7;
-      local.z -= (r.z - 0.5) * f32(FERN_CELL.z) * 0.7;
+      let jitter = cell_jitter(id, 10u, FERN_CELL, 0.9);
+      local.x -= jitter.x;
+      local.z -= jitter.y;
       local.y = y - ground;
       let reach = (3.0 + r.y * 3.2) * S;
       let bound = sd_cylinder(local - vec3f(0.0, reach * 0.4, 0.0), reach * 0.9, reach + 0.5 * S);
@@ -509,12 +607,18 @@ fn rocks(p: WorldPoint, ground: f32) -> vec2f {
       let q = wp_offset(p, -vec3f(shift));
       let id = wp_repeat_id(q, ROCK_CELL);
       let r = cell_random(id, 4u);
-      if (r.x > 0.45) {
+      // The density costs a noise sample, so reject on the cell's own random first:
+      // the cells past the gate's ceiling never need it.
+      if (r.x > 0.62) {
+        continue;
+      }
+      if (r.x > 0.12 + 0.5 * patch_density(id, ROCK_CELL, 6u)) {
         continue;
       }
       var local = wp_repeat(q, ROCK_CELL);
-      local.x -= (r.y - 0.5) * f32(ROCK_CELL.x) * 0.7;
-      local.z -= (r.x - 0.5) * f32(ROCK_CELL.z) * 0.7;
+      let jitter = cell_jitter(id, 11u, ROCK_CELL, 0.9);
+      local.x -= jitter.x;
+      local.z -= jitter.y;
       local.y = y - ground + (1.0 + r.z * 2.0) * S; // sunk into the ground
       let rr = (1.6 + r.z * 3.4) * S;
       let d = sd_ellipsoid(local, vec3f(rr * 1.2, rr * 0.85, rr)) - S * 0.3 * sin(local.x * 1.7 / S) * sin(local.z * 1.3 / S);
@@ -551,12 +655,19 @@ fn forest(p: WorldPoint) -> vec2f {
   // Water: below its surface and above the bed. Both halves are 1-Lipschitz.
   s = pick(s, vec2f(max(y - top, ground - y), f32(BLOCK_WATER)));
 
+  // Nothing rooted grows below the waterline: a tree standing in the middle of a lake
+  // with its trunk under water reads as a mistake, and the shore is more of a shore with
+  // a band of bare sand between the wood and the water. Boulders are left alone; a rock
+  // in a stream belongs there.
+  let dry = ground - top;
   if (sample_footprint <= TREE_FOOTPRINT) {
-    s = pick(s, trees(p, ground));
+    if (dry > 1.5 * S) {
+      s = pick(s, trees(p, ground));
+      s = pick(s, giants(p, ground));
+    }
     s = pick(s, rocks(p, ground));
-    s = pick(s, giants(p, ground));
   }
-  if (sample_footprint <= UNDERGROWTH_FOOTPRINT) {
+  if (sample_footprint <= UNDERGROWTH_FOOTPRINT && dry > 0.5 * S) {
     s = pick(s, mushrooms(p, ground));
     s = pick(s, ferns(p, ground));
   }

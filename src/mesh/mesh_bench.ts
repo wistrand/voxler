@@ -80,6 +80,7 @@ for (const c of cases) {
     clusterQuads: CLUSTER_QUADS,
     clusterOrder: ORDER_EMISSION,
     ao: false,
+    light: false,
   };
   const out = new ArrayBuffer(1 << 20);
   const ctx = { alloc: () => out, transfer: () => {} };

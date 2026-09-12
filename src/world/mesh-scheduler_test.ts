@@ -69,6 +69,7 @@ const OPTIONS: MeshSchedulerOptions = {
   clusterQuads: CLUSTER_QUADS,
   clusterOrder: ORDER_EMISSION,
   ao: false,
+  blockLight: false,
 };
 
 function setup(shared = false, options = OPTIONS) {

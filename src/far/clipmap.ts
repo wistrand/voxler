@@ -46,7 +46,7 @@ export const DEFAULT_CLIPMAP_OPTIONS: ClipmapOptions = {
   size: 32,
   levels: 8,
   firstLevel: 1,
-  bricks: 49152, // 27 MiB; this world uses 39,564 of them, and drops are counted
+  bricks: 49152, // 27 MiB; terrain uses 39,564 of them and the forest 12,741, and drops are counted
 };
 
 export interface Slab {

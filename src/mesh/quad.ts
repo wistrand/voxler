@@ -2,8 +2,13 @@
 // quad"; the vertex shader decode (plan-rendering) must mirror decodeQuad() and
 // quadCorners() exactly. Pure.
 //
-// word0: x 0-4, y 5-9, z 10-14, (w-1) 15-19, (h-1) 20-24, face 25-27
-// word1: block id 0-15, AO 16-23
+// word0: x 0-4, y 5-9, z 10-14, (w-1) 15-19, (h-1) 20-24, face 25-27, light base 28-31
+// word1: block id 0-15, AO 16-23, light offsets 24-31
+//
+// Light is split across the two words because it needs twelve bits and neither word has
+// twelve spare: the quad's lowest corner level (0-15) in word0, and each corner's step
+// above it (0-3) in word1. `light` here is the packed pair faceLight() produces, base in
+// bits 0-3 and corner k's offset at bits 4 + 2k.
 
 export const FACE_POS_X = 0;
 export const FACE_NEG_X = 1;
@@ -30,18 +35,27 @@ export interface Quad {
   face: number;
   id: number; // block id
   ao: number; // 8 bits, 2 per corner
+  light: number; // 12 bits: base 0-3, corner offsets 4-11 (src/mesh/light.ts)
 }
 
 export function newQuad(): Quad {
-  return { x: 0, y: 0, z: 0, w: 1, h: 1, face: 0, id: 0, ao: 0 };
+  return { x: 0, y: 0, z: 0, w: 1, h: 1, face: 0, id: 0, ao: 0, light: 0 };
 }
 
-export function encodeWord0(x: number, y: number, z: number, w: number, h: number, face: number): number {
-  return (x | (y << 5) | (z << 10) | ((w - 1) << 15) | ((h - 1) << 20) | (face << 25)) >>> 0;
+export function encodeWord0(
+  x: number,
+  y: number,
+  z: number,
+  w: number,
+  h: number,
+  face: number,
+  light = 0,
+): number {
+  return (x | (y << 5) | (z << 10) | ((w - 1) << 15) | ((h - 1) << 20) | (face << 25) | ((light & 15) << 28)) >>> 0;
 }
 
-export function encodeWord1(id: number, ao: number): number {
-  return (id | (ao << 16)) >>> 0;
+export function encodeWord1(id: number, ao: number, light = 0): number {
+  return (id | (ao << 16) | ((light >>> 4) << 24)) >>> 0;
 }
 
 export function decodeQuad(word0: number, word1: number, out: Quad): Quad {
@@ -53,6 +67,7 @@ export function decodeQuad(word0: number, word1: number, out: Quad): Quad {
   out.face = (word0 >>> 25) & 7;
   out.id = word1 & 0xffff;
   out.ao = (word1 >>> 16) & 0xff;
+  out.light = ((word0 >>> 28) & 15) | (((word1 >>> 24) & 0xff) << 4);
   return out;
 }
 

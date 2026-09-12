@@ -5,6 +5,7 @@ import cameraWgsl from "./camera.wgsl" with { type: "text" };
 import gizmoWgsl from "./gizmo.wgsl" with { type: "text" };
 import gridWgsl from "./grid.wgsl" with { type: "text" };
 import skyColorWgsl from "./sky-color.wgsl" with { type: "text" };
+import { skyConstantsWgsl } from "./sky.ts";
 import skyWgsl from "./sky.wgsl" with { type: "text" };
 import "../gpu/globals.ts";
 import type { FlyCamera } from "../camera/camera.ts";
@@ -248,7 +249,8 @@ export class Renderer {
     };
     this.previewArgs = { format, report };
     const voxelizerReady = stage("voxelize", this.voxelizer.init()); // failure is reported; rendering continues
-    const nearReady = stage("near", this.near.init(CAMERA_SOURCE, format, DEPTH_FORMAT, this.frameLayout, report));
+    this.near.setShadowSource(this.far.shadowResources());
+    const nearReady = stage("near", this.near.init(CAMERA_SOURCE, this.world.sky, format, DEPTH_FORMAT, this.frameLayout, report));
     const farReady = stage("far", this.far.init(format, DEPTH_FORMAT, report));
     const drawTestDone = stage("drawTest", runDrawTest(device, report).then((failure) => {
       this.drawTest = failure ?? "ok";
@@ -258,6 +260,7 @@ export class Renderer {
     const [skyModule, gridModule, gizmoModule] = await Promise.all([
       compileShader(device, "sky", [
         CAMERA_SOURCE,
+        { name: "sky.wgsl (generated)", code: skyConstantsWgsl(this.world.sky) },
         { name: "sky-color.wgsl", code: skyColorWgsl },
         { name: "sky.wgsl", code: skyWgsl },
       ], report),
