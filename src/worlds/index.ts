@@ -9,8 +9,15 @@ import type { Sky } from "../render/sky.ts";
 
 export interface WorldEntry {
   readonly code: string;
-  // Default camera start (world voxels), above the surface; `?at=` overrides it.
+  // The world's anchor (world voxels), above the surface. Two things hang off it and
+  // they are not the same thing: the bench scenes are paths measured as offsets from it
+  // (`src/bench/scenes.ts`), and the camera starts here when the world has no `start`.
+  // A scene's numbers are only comparable to the last run of the same scene, so this
+  // moves only when the terrain under it does, never to compose a nicer opening view.
   readonly spawn: readonly [number, number, number];
+  // Where the camera starts instead, when the opening view wants somewhere the benchmarks
+  // must not follow. `?at=` overrides it; unset means `spawn`.
+  readonly start?: readonly [number, number, number];
   // Sky and lighting preset (src/render/sky.ts); DEFAULT_SKY when unset.
   readonly sky?: string;
   // Far-field clipmap overrides, for worlds whose subject is distance. A world that is
@@ -29,6 +36,7 @@ export interface WorldProgram {
   readonly code: string;
   readonly seed: number;
   readonly spawn: readonly [number, number, number];
+  readonly start?: readonly [number, number, number];
   readonly sky: Sky;
   readonly far?: WorldEntry["far"];
   readonly birds?: boolean;
@@ -42,7 +50,12 @@ export const WORLDS: Readonly<Record<string, WorldEntry>> = {
   // camera inside the hill and every bench number it produces is for an empty frame
   // (gotchas.md "The grove bench walked 44 voxels underground").
   // A night wood: the moon is the only sky light, so the glowing plants carry the scene.
-  forest: { code: forest, spawn: [8, 188, 8], sky: "night", birds: true },
+  // `start` opens on the valley the screenshots are taken in (docs/README.md), a bluff 88
+  // voxels over the river with the snow line to one side. It is not the spawn, because
+  // the grove bench walks 20 voxels under the spawn to get beneath the canopy and the
+  // ground here is far enough down that the same walk would be an aerial shot: the scene
+  // would stop measuring what it was written to measure.
+  forest: { code: forest, spawn: [8, 188, 8], start: [-108, 267, 293], sky: "night", birds: true },
   // The floor is near y = 40 and the buttes stand a few hundred voxels over it; the
   // spawn is out on the open desert looking at them rather than under one.
   // The monuments stand a kilometre apart over an empty floor, so nearly every brick

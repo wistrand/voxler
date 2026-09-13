@@ -8,8 +8,19 @@
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' fill='%23223'/%3E%3Cpath d='M8 2l5 3v6l-5 3-5-3V5z' fill='%236c8'/%3E%3Cpath d='M8 2l5 3-5 3-5-3z' fill='%239ea'/%3E%3Cpath d='M8 8v6l-5-3V5z' fill='%234a6'/%3E%3C/svg%3E">
 <style>
   html, body { margin: 0; height: 100%; overflow: hidden; background: #000; }
+  /* Centres the canvas, which only shows when it is letterboxed (see canvas.fit). */
+  body { display: grid; place-items: center; }
   canvas { display: block; width: 100vw; height: 100vh; touch-action: none; user-select: none; cursor: grab; }
   canvas:active { cursor: grabbing; }
+  /* `?size=` renders at a fixed size, and the window is rarely that shape. Stretching
+     one to the other gives the frame a pixel that is not square, so the picture's own
+     aspect follows the window: a circle is an ellipse, and by how much depends on how
+     the window is dragged. Fit it inside the window at the render target's aspect
+     instead (main.ts sets `--fit-aspect` to it, as a plain number) and let the bars be
+     black. `max-height: 100vh` would not do instead: a clamp on the height does not
+     travel back to a width that was stated outright, so a short wide window stretched
+     the frame just as before. */
+  canvas.fit { width: min(100vw, calc(100vh * var(--fit-aspect))); height: auto; }
   #message {
     position: fixed; inset: 0; display: grid; place-items: center; padding: 2rem;
     color: #ddd; font: 16px/1.5 system-ui, sans-serif; text-align: center;

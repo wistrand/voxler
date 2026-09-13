@@ -103,7 +103,7 @@ const CONTROLS_HELP = "drag: look (mouse or touch)  WASD move  Space/C up/down  
   "?glow=0 no emission  ?wind=0 no sway  ?light=0 no block light  ?shadow=0 no shadows\n" +
   `?sky=${Object.keys(SKIES).join("|")} overrides the world's own sky\n` +
   "?far=0 no far field  ?far=steps|bricks|levels debug view (F rebuilds it)  ?farScale=0.1..1\n" +
-  "?birds=0 no birds (the forest has them)\n" +
+  "?birds=0 no birds (the forest has them)  ?gizmo=0 no axis cross\n" +
   "?farLevels=n ?farSize=n ?farFirst=k ?farBricks=n ?farSlabs=n ?farBeam=0  ?farAdapt=0  ?farCheck\n" +
   `?bench=${Object.keys(SCENES).join("|")}&runs=n benchmark`;
 
@@ -123,6 +123,8 @@ const WORLD_STAGES = ["voxelize", "near", "far"] as const;
 const view = {
   preview: params.get("preview") === "1" || (params.get("preview") !== "0" && !meshesByDefault),
   grid: false,
+  // `?gizmo=0` starts without the axis cross, which is what a screenshot wants.
+  gizmo: params.get("gizmo") !== "0",
   meshes: true,
 };
 // `?cull=n` is a mask: 1 frustum, 2 face direction, 4 occlusion (so 0 none, 3 no
@@ -183,6 +185,7 @@ function selectWorld(): WorldProgram {
     code: entry.code,
     seed: Number.isInteger(seed) ? seed >>> 0 : 1,
     spawn: entry.spawn,
+    start: entry.start,
     sky,
     far: entry.far,
     // `?birds=0` turns them off, for a frame with one fewer pass in it.
@@ -190,7 +193,8 @@ function selectWorld(): WorldProgram {
   };
 }
 
-// `?size=1920x1080` renders at a fixed pixel size (stretched to the window).
+// `?size=1920x1080` renders at a fixed pixel size, letterboxed into the window at its own
+// aspect rather than stretched to the window's (applySize).
 // Benchmarks default to 1080p so results compare across window sizes.
 function fixedSize(): [number, number] | null {
   const m = params.get("size")?.match(/^(\d+)x(\d+)$/);
@@ -491,14 +495,12 @@ function showMessage(text: string): void {
 }
 
 // `?at=x,y,z` starts the camera at a world position, e.g. `?at=1000000,10,1000000`;
-// otherwise it starts at the world's spawn point.
+// otherwise it starts where the world opens: its own `start`, or its spawn point when it
+// does not name one. The aim is the same everywhere, looking along -Z and a little down.
 function placeCamera(): void {
   const at = params.get("at")?.split(",").map(Number);
-  if (at && at.length === 3 && at.every(Number.isFinite)) {
-    camera.setPosition(at[0], at[1], at[2]);
-  } else {
-    camera.setPosition(world.spawn[0], world.spawn[1], world.spawn[2]);
-  }
+  const from = at && at.length === 3 && at.every(Number.isFinite) ? at : world.start ?? world.spawn;
+  camera.setPosition(from[0], from[1], from[2]);
   camera.setOrientation(0, START_PITCH);
 }
 
@@ -610,6 +612,17 @@ function applySize(renderer: Renderer, gpu: Gpu): void {
   const height = Math.max(1, Math.min(renderSize ? renderSize[1] : pixelHeight, max));
   if (canvas.width !== width) canvas.width = width;
   if (canvas.height !== height) canvas.height = height;
+  // A fixed render size is laid out at the window's shape unless it is told otherwise,
+  // and the two rarely agree: the frame is then scaled by a different factor across than
+  // down, which is a pixel that is not square. Give the element the render target's own
+  // aspect and let it letterbox (canvas.fit in index.html), so the picture is the same
+  // picture whatever the window is doing. Without `?size=` the render target already is
+  // the window and there is nothing to fit.
+  if (renderSize) {
+    canvas.style.aspectRatio = `${width} / ${height}`;
+    canvas.style.setProperty("--fit-aspect", String(width / height));
+    canvas.classList.add("fit");
+  }
   renderer.resize(width, height);
   sizeDirty = false;
   sizedRenderer = renderer;
@@ -871,6 +884,7 @@ async function start(): Promise<void> {
     if (farCheck) setTimeout(() => runFarCheck(renderer), 20000);
   }
   renderer.showGrid = view.grid;
+  renderer.showGizmo = view.gizmo;
   renderer.showMeshes = view.meshes;
   renderer.near.cullFlags = cullFlags;
   renderer.cullCheck = cullCheck;
@@ -1077,6 +1091,12 @@ function toggleGrid(): void {
   if (renderer) renderer.showGrid = view.grid;
 }
 
+function toggleGizmo(): void {
+  view.gizmo = !view.gizmo;
+  const renderer = globalThis.voxler.renderer;
+  if (renderer) renderer.showGizmo = view.gizmo;
+}
+
 function toggleMeshes(): void {
   view.meshes = !view.meshes;
   const renderer = globalThis.voxler.renderer;
@@ -1131,8 +1151,9 @@ async function pickBirdAt(clientX: number, clientY: number): Promise<void> {
   const renderer = globalThis.voxler.renderer;
   if (!renderer || renderer.birds === null) return;
   // The cursor as NDC over the canvas as it is displayed, and the aspect from the render
-  // target rather than the rect: when `?size=` makes the two disagree the image is
-  // stretched and the ray through a pixel has to be stretched with it (controls.ts).
+  // target, which is what the projection used. Under `?size=` the element is letterboxed
+  // to that same aspect, so the rect would give the same answer; the render target is
+  // still the one to ask, because it is the one the ray is being cast through.
   const rect = canvas.getBoundingClientRect();
   if (rect.width <= 0 || rect.height <= 0) return;
   const aspect = canvas.height > 0 ? canvas.width / canvas.height : 1;
@@ -1201,6 +1222,7 @@ const hud = new Hud(document.body, [
   { label: "mesh", title: "Near-field meshes (M)", on: () => view.meshes, press: toggleMeshes },
   { label: "sdf", title: "SDF preview (P)", on: () => view.preview, press: togglePreview },
   { label: "grid", title: "Chunk grid (G)", on: () => view.grid, press: toggleGrid },
+  { label: "axes", title: "The axis cross in the corner", on: () => view.gizmo, press: toggleGizmo },
   {
     label: "follow",
     title: "Follow the bird a click picked out, or if none, fly along whatever is under the camera (K)",

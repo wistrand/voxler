@@ -301,6 +301,12 @@ and the scene's -20 drops under it. The walk is
 slower (8 voxels a second, not 14) so it stays in one stretch of wood; the ground along it
 runs from 95 down to 71, which a fixed height cannot hug.
 
+The spawn is therefore a measurement, and it stays where it is. Where the world *opens* is
+a separate field, `start` in `src/worlds/index.ts`, added when the forest wanted to open on
+the valley the screenshots are taken in: a bluff 88 voxels over the river, where the same
+-20 walk would be an aerial shot. Moving a spawn to compose a view silently changes what
+every scene for that world measures, which is the failure above with better scenery.
+
 Measured again on 2026-09-13 with the world built before the run starts
 ([gotchas.md](gotchas.md) "A bench that starts before the world is built"), the grove
 nearly holds it: interval p50 and p99 both 8.34 with 12 frames of 1425 missed

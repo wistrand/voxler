@@ -3,6 +3,9 @@
 A voxel engine for the browser, built on WebGPU, aimed at very large worlds at high
 frame rates.
 
+It runs at [wistrand.github.io/voxler](https://wistrand.github.io/voxler/) if your
+browser has WebGPU.
+
 Voxler splits the world by distance. Close to the camera, 32-voxel chunks are meshed
 in background workers with binary greedy meshing, which turns occupancy into bit
 columns so face culling and merging are a few integer operations per row. The
@@ -43,6 +46,11 @@ fallback.
 ```bash
 deno task dev      # then open the printed URL
 ```
+
+`deno task docs` serves the landing page and a fresh build of the demo the way GitHub
+Pages serves them, which is without the cross-origin isolation headers the dev server
+sends. That is the difference worth checking: without them there is no `SharedArrayBuffer`
+and mesh jobs copy their payloads instead of sharing them.
 
 ## How it works
 

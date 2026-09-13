@@ -37,5 +37,25 @@ path and the numbers are not comparable to anything in the repo, on top of being
 stranger's hardware. Nothing published here should ever be quoted as a measurement.
 
 Screenshots are taken from the running engine at the viewport size in `.mcp.json`, with
-the on-screen panel hidden (`document.getElementById("hud").style.display = "none"`).
-Keep them under a few hundred KB each; they are in git forever.
+`?gizmo=0` for the axis cross and the on-screen panel hidden
+(`document.getElementById("hud").style.display = "none"`). Shot at 1600x900 CSS pixels,
+which is 2000x1125 at the dev machine's device pixel ratio, then resized to the 1600x900
+the page declares. Keep them under a few hundred KB each; they are in git forever.
+
+Both forest shots are from one place, so the day and the night are the same valley. It is
+where the forest now opens (`start` in `src/worlds/index.ts`), so the night shot needs no
+switches beyond the screenshot ones:
+
+    ?world=forest&gizmo=0
+    ?world=forest&sky=day&gizmo=0
+
+The shots in the repo were taken a little off that aim, at yaw -17.0 and pitch 1.2
+(`voxler.camera.setOrientation`), which puts the moon in the upper right rather than out
+of frame.
+
+The birds in them are wherever the flock happened to be. They cannot be put in front of the
+moon from here, whatever you wait for: the eye is at y 267 and the flock flies between 200
+and 265, so every bird is below the horizon (elevation -17.7 to -0.4 degrees over a
+20-second sample) and the moon is 24.9 degrees above it. Measured, not guessed: 44,548 bird
+readings, closest approach 26.7 degrees. A shot with a bird crossing the moon needs an eye
+under the flock, and the ground here is at y 179.

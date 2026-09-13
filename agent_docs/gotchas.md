@@ -1080,3 +1080,66 @@ can open in your editor.
   ```
 
   That is the same view the runner gets, and it takes a minute instead of a push.
+
+### A fixed render size is stretched to the window, and a stretched pixel is not square
+
+`?size=WxH` sets the backing store and nothing else. The element was laid out at
+`width: 100vw; height: 100vh`, so the browser scaled the frame by one factor across and
+another down, and what the picture looked like depended on the window: a 1920x1080 render
+in a square window is squashed to 56% of its width. Every `?bench=` run is a fixed size
+too, 1920x1080 by default, so this was the normal case, not an odd one.
+
+Nothing about it is loud. The scene still draws, the numbers are still right, and the
+projection is correct for the render target; only the last step, laying the image out on
+the page, is wrong. It shows up as a circle that is an ellipse and a bird that is fatter
+than it should be, both of which read as "the model is a bit off" rather than "the CSS is
+wrong".
+
+The canvas now carries the render target's aspect and fits inside the window
+(`canvas.fit` in `index.html`, set by `applySize()` in `src/main.ts`). The rule that
+does it is worth reading before changing:
+
+```css
+canvas.fit { width: min(100vw, calc(100vh * var(--fit-aspect))); height: auto; }
+```
+
+The obvious spelling, `width: 100vw; height: auto; max-height: 100vh`, is wrong in one
+direction only. An aspect ratio transfers a min or max constraint into an axis that is
+`auto`, and here the width was stated outright, so clamping the height left the width at
+100vw: a tall window letterboxed correctly and a short wide one stretched exactly as
+before. The bug hid behind whichever window shape it was first tried in.
+
+**A pointer maps through the element, not the render target.** `pickBirdAt()` and the
+wheel dolly take NDC from `getBoundingClientRect()` and the aspect from `canvas.width /
+canvas.height`, which was written to survive the stretch and now agrees with the element
+anyway. Both spaces are needed: the rect says where the cursor is on the image, the render
+target says what shape the image is.
+
+### `deno task build` disarms the dev server that is already running
+
+`serve.ts --dev` serves `dist/`, and `deno task build` writes a release bundle into the
+same `dist/`. Run a build while a dev server is up and it keeps serving, keeps reloading,
+and quietly hands out a bundle with the dev-only paths compiled out of it: saving a
+benchmark result is the one that shows, because `__BENCH_SAVE__` is false in a release
+build and the overlay then says `not saved` on a machine that has the very server the save
+needs.
+
+It heals itself the moment a source file changes, because the watcher rebuilds in dev
+mode, so the symptom appears and vanishes without anything being fixed. `deno task docs`
+runs `deno task build` first, so previewing the published site does it too.
+
+**A trailing newline is not a change.** esbuild's watcher compares contents, so `touch`
+will not trigger the rebuild that puts the dev bundle back. Change a byte, or restart
+`deno task dev`.
+
+### A frame counter incremented once for two different draws
+
+The gizmo's block ended with `counters.draws += 2`, and the second one was not the
+gizmo's: it stood in for the sky or preview blit drawn earlier, which had no increment of
+its own. Nothing said so. The moment the gizmo became conditional the background stopped
+being counted whenever the gizmo was off, and `draws` in the overlay dropped by two for a
+switch that removes one draw.
+
+**Increment the counter next to the draw it counts.** A tally collected somewhere
+convenient is correct exactly until one of the things it tallies becomes optional, and the
+overlay is where a wrong count is least likely to be questioned.

@@ -123,7 +123,7 @@
 
 <div class="grid">
   <figure>
-    <img src="media/forest-day.jpg" alt="A lake under a snow-capped mountain, with conifers, alpine ferns on the rock and a flock of white birds." width="1600" height="900">
+    <img src="media/forest-day.jpg" alt="A river valley under a snow-capped mountain, with conifers, glowing mushroom caps and a flock of white birds over the canopy." width="1600" height="900">
     <figcaption>
       The forest again in daylight. Four tree species, mountains with a rock band and snow
       on top, undergrowth that climbs past the tree line, and flocks of boids over it.
@@ -153,9 +153,19 @@
 
 <p>
   Measured at 1080p with everything on: near field, far field, textures, baked ambient
-  occlusion, block light, shadows and translucency. An Apple M3 holds its 60 Hz panel with
-  no dropped frames in both benchmark scenes. An Intel Arc B390 runs the same scenes at
-  120 Hz and drops a few frames of the fourteen hundred in each.
+  occlusion, block light, shadows and translucency. An Apple M3 holds its 60 Hz panel
+  through both benchmark scenes without dropping a frame. An Intel Arc B390 asked for
+  twice the frame rate keeps 120 Hz through the walk under the canopy bar 12 frames of
+  1425, and misses 46 of 1151 on the flyover, where the ray-marched distance is most of
+  the frame.
+</p>
+
+<p>
+  Those are two machines, and neither of them is yours. The engine has a benchmark
+  harness and the page will run it, but a run from here is not comparable to anything:
+  GitHub Pages cannot send the headers that make a page cross-origin isolated, so the
+  workers copy their payloads instead of sharing them. Numbers worth quoting come off a
+  local dev server.
 </p>
 
 <footer>

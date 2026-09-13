@@ -209,8 +209,8 @@ export class FlyControls {
     // fine here; a wheel event is a gesture, not the frame path.
     const rect = this.canvas.getBoundingClientRect();
     // The aspect comes from the render target, not the rect, because that is what the
-    // projection used: when `?size=` makes the two disagree the image is stretched, and
-    // the ray through a pixel has to be stretched with it.
+    // projection used. Under `?size=` the element is letterboxed to that same aspect, so
+    // the two agree; the render target is still the one to ask.
     const aspect = this.canvas.height > 0 ? this.canvas.width / this.canvas.height : 1;
     const ndcX = rect.width > 0 ? ((e.clientX - rect.left) / rect.width) * 2 - 1 : 0;
     const ndcY = rect.height > 0 ? 1 - ((e.clientY - rect.top) / rect.height) * 2 : 0;

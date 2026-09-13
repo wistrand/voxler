@@ -127,6 +127,9 @@ export class Renderer {
     if (on) this.ensurePreview();
   }
   showGrid = true;
+  // The axis cross in the corner. On by default, and worth turning off for a screenshot:
+  // it is drawn over the frame like the grid, not part of the world.
+  showGizmo = true;
   showMeshes = true;
   // Near-field meshes; fed by the mesh scheduler through main.ts.
   readonly near: NearField;
@@ -797,6 +800,7 @@ export class Renderer {
       pass.setPipeline(p.sky);
       pass.draw(3);
     }
+    counters.draws++;
     // After the sky and the preview, which fill the same pixels and would cover it,
     // and before the grid. The blit binds its own group 0, so the frame's goes back
     // for what follows.
@@ -810,10 +814,12 @@ export class Renderer {
       pass.draw(6, GRID_INSTANCES);
       counters.draws++;
     }
-    pass.setViewport(this.gizmoX, this.gizmoY, this.gizmoSize, this.gizmoSize, 0, 1);
-    pass.setPipeline(p.gizmo);
-    pass.draw(6);
-    counters.draws += 2;
+    if (this.showGizmo) {
+      pass.setViewport(this.gizmoX, this.gizmoY, this.gizmoSize, this.gizmoSize, 0, 1);
+      pass.setPipeline(p.gizmo);
+      pass.draw(6);
+      counters.draws++;
+    }
     pass.end();
     // Translucent last: it blends over the background as well as the near field, and
     // it tests against the opaque depth without writing to it.

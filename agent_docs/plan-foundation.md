@@ -1,9 +1,11 @@
 # Plan: foundation
 
-> Status: mostly done. All six phases landed. Still open: Safari, Firefox on
-> Windows, and Android touch checks (deferred for hardware); remaining counters
-> (arrive with their systems); the sporadic-stall investigation (phase 6). Promote
-> to `architecture-*` once those close. First plan in the build order; every
+> Status: mostly done. All six phases landed and every box is ticked. Still open:
+> Safari, Firefox on Windows, and Android touch checks (deferred for hardware) and the
+> sporadic-stall investigation (phase 6). Apple silicon is no longer among them: an M3
+> was measured over the tailnet, and what it says about per-pass timings is in
+> [gotchas.md](gotchas.md) "GPU pass timings do not mean the same thing on an Apple GPU".
+> Promote to `architecture-*` once those close. First plan in the build order; every
 > later plan depends on the device setup, frame loop, instrumentation, worker pool,
 > and bench harness built here.
 
@@ -54,7 +56,9 @@ and because the dev server needs custom headers either way.
   scripted camera path). The run collects frame-time percentiles and counters and
   prints one JSON object. Results are saved to
   `bench/results/<scene>.<UTC timestamp>.<browser>.json` (dated on purpose, so runs
-  accumulate as history; the browser tag separates devices).
+  accumulate as history; the browser tag separates devices). `bench/` is gitignored, so
+  that history is local to the machine that made it: a claim names a file as a pointer
+  and carries the numbers themselves.
 - **Manual checks**: Chrome DevTools allocation timeline for the zero-allocation
   invariant; overlay values sanity-checked by eye.
 
@@ -149,13 +153,17 @@ Not yet checked: touch look on Android (skipped for now). Unit tests for `mat4` 
 - [x] GPU pass timers via `timestamp-query` when granted, resolved into a ring of
       four readback buffers and read frames later; degrade to CPU-only (`GpuTimer`
       in `src/gpu/timer.ts`; one timed pass, "main")
-- [ ] Counters: visible clusters, quads drawn, upload bytes, worker queue depth,
-      jobs completed. (Worker pool line added in phase 5: queued, running, done
-      per second, dropped, failed, busy %.) GPU-side counters (cull results) come back through the same
-      readback ring. Done so far: `FrameCounters` with draws and upload bytes,
-      filled by `Renderer`. The rest arrive with the systems that produce them
-      (worker pool in phase 5, clusters and GPU counters in plan-rendering); the
-      readback ring will need generalizing beyond timestamps for GPU counters.
+- [x] Counters: visible clusters, quads drawn, upload bytes, worker queue depth,
+      jobs completed. They landed with the systems that produce them, as planned:
+      `FrameCounters` (draws, upload bytes) filled by `Renderer` here; the worker pool
+      line (queued, running, done per second, dropped, failed, busy %) in phase 5; the
+      cull results (tested, drawn, by face, by frustum, hidden, empty) in
+      plan-rendering, read back through `CounterReadback` (`src/gpu/counters.ts`), which
+      is the generalization of the timestamp ring this item asked for. The on-screen
+      panel carries a one-line version of the same thing for a reader who is not
+      debugging: resident chunks and the voxels they stand for, quads, clusters drawn
+      against clusters live, far-field bricks (`describeCounts()` in `src/main.ts`),
+      built on the panel's own quarter-second tick and never in the frame path.
 - [x] Overlay as a DOM element updated a few times per second, not every frame;
       skipped entirely while the overlay is hidden
 - [x] p50/p95/p99 over a sliding window (`summarize()` in `src/util/percentile.ts`)
@@ -213,9 +221,15 @@ results; revisit if meshing under rapid edits shows it.
 - [x] Run collects percentiles and counters, prints JSON, stops the loop
       (`BenchRun` in `runner.ts`, `BenchSession` in `session.ts`). Warm-up is
       rendered but not measured. Renders at 1920x1080 by default (`?size=WxH`
-      overrides). `&runs=n` repeats and reports the p50 spread between runs. Results
-      POST to the dev server, which writes
-      `bench/results/<scene>.<UTC timestamp>.<browser>.json`.
+      overrides, and the frame is letterboxed into the window at that size's aspect
+      rather than stretched to the window's, so the same run looks the same whatever
+      shape the window is). `&runs=n` repeats and reports the p50 spread between runs.
+      Results POST to the dev server, which writes
+      `bench/results/<scene>.<UTC timestamp>.<browser>.json`. Only the dev build posts:
+      `serve.ts --dev` is the one server that answers that route, so `build.ts` defines
+      `__BENCH_SAVE__` false for a release build and the fetch in `src/bench/save.ts` is
+      compiled out with it. A run off the published site still measures and reports; the
+      JSON stays in the console.
 - [x] Record the empty-scene baseline and revise the performance targets in CLAUDE.md
       if the hardware tiers there are wrong (dev-machine row added; see below)
 

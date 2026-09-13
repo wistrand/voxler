@@ -140,15 +140,18 @@ today `src/gpu/`, `src/render/`, `src/camera/`, `src/util/`, `src/debug/`,
 | `src/far/`       | brick builder, clipmaps, far-field march and composite, shadow rays, the adaptive reach |
 | `src/workers/`   | `WorkerPool`, job queue, buffer pool, the worker, job handlers |
 | `src/util/`      | math, ring buffers, timers                                     |
-| `src/debug/`     | the debug overlay (caps, stats, camera, errors), the on-screen panel (frame rate, switches, compile progress) and frame `Stats` |
+| `src/debug/`     | the debug overlay (caps, stats, camera, errors), the on-screen panel (frame rate, switches, what the world is holding, compile progress) and frame `Stats` |
 | `src/bench/`     | benchmark scenes, runner, session; tracked, and `/bench/` in `.gitignore` is anchored so it stays that way ([gotchas.md](agent_docs/gotchas.md) "A gitignore pattern without a leading slash") |
 | `bench/results/` | dated benchmark result files (generated, gitignored, local to a machine) |
-| `index.html`     | page shell, copied to `dist/` by the build                     |
+| `index.html`     | page shell, copied to `dist/` by the build; owns the canvas layout, including the letterbox a fixed `?size=` is fitted into |
 | `build.ts`       | esbuild bundling (`buildRelease()`, `watch()`)                 |
-| `serve.ts`       | static server for `dist/` with COOP/COEP headers               |
+| `serve.ts`       | static server for `dist/` with COOP/COEP headers; `--dev` also watches, rebuilds and answers the benchmark save route |
+| `docs-serve.ts`  | static server for the Pages site, deliberately without COOP/COEP (`deno task docs`) |
 | `dist/`          | build output, gitignored; CI copies it into the published site under `play/` |
 | `agent_docs/`    | deep dives (linked below)                                      |
 | `docs/`          | the GitHub Pages site: landing page and screenshots, published with a demo built in CI (`docs/README.md`) |
+| `.github/`       | the `pages` workflow: check, test, build, then publish `docs/` with `dist/` under `play/` |
+| `LICENSE`        | Apache 2.0                                                     |
 
 WGSL lives next to the TS that owns the pipeline (`src/render/cull.wgsl`, ...).
 
@@ -160,7 +163,7 @@ deno task build    # clean release bundle into dist/; fails on any esbuild warni
 deno task serve    # serve an existing dist/ without rebuilding
 deno task docs     # build, then serve the GitHub Pages site with no COOP/COEP, as Pages
                    # serves it (127.0.0.1:8001; BASE=voxler to mirror the project subpath)
-deno task check    # type-check src/, build.ts, serve.ts
+deno task check    # type-check src/, build.ts, serve.ts, docs-serve.ts
 deno task test     # unit tests; GPU tests use Deno's built-in WebGPU (skip without an adapter)
 deno task bench    # kernel benchmarks (meshing, palette compression, reduction)
 ```
@@ -173,6 +176,15 @@ and `docs` is how to check it still does. It serves at `/`; `BASE=voxler` puts i
 subpath a project site actually lives at (`https://<user>.github.io/<repo>/`), which is
 worth a look after touching a path in `docs/index.html`, because an absolute one works at
 the root and 404s once deployed.
+
+Every push to `main` publishes the site, live at
+[wistrand.github.io/voxler](https://wistrand.github.io/voxler/). The workflow type-checks
+and runs the suite before it builds, so a red test stops the deploy rather than publishing
+over it; no bundle is committed, `dist/` is built in CI and copied to `play/`. `deno task
+build` writes the same bundle a release build writes, which is not the one the dev server
+wants: a build run beside a live `deno task dev` leaves it serving a release bundle until
+the next source change ([gotchas.md](agent_docs/gotchas.md) "`deno task build` disarms the
+dev server that is already running").
 
 Server env for `dev` and `serve`: `HOST` (bind address, default `127.0.0.1`), `PORT`,
 and `TLS_CERT` + `TLS_KEY` (PEM paths). Certs live in the gitignored `.certs/`; the
@@ -207,7 +219,9 @@ URL switches: `?world=<name>&seed=<n>` picks the world program (`showcase`, `ter
 invariant); `?at=x,y,z` starts the camera at a world position; `?workers=n` sets
 the pool size; `?workerTest` runs the worker pool self-test into the overlay;
 `?jobBatch=n` caps jobs per worker message (1 disables batching);
-`?size=WxH` renders at a fixed size; `?previewScale=0.1..1` sets the SDF preview's
+`?size=WxH` renders at a fixed size, letterboxed into the window at that size's own
+aspect rather than stretched to the window's, so the frame's pixels stay square whatever
+shape the window is; `?previewScale=0.1..1` sets the SDF preview's
 resolution (default 0.5); `?preview=0` starts with the preview off; `?voxelBench` measures voxelizer throughput around the
 spawn and saves the result; `?voxelSlots=n` sets voxelizer readback slots (default 8);
 `?stream=0` turns chunk streaming off; `?streamRadius=n` and `?streamHeight=n` set
@@ -227,7 +241,8 @@ draws flat block colors instead of sampling the block textures; `?glow=0` drops 
 emission, `?wind=0` holds swaying blocks still, `?light=0` meshes and draws without block
 light and `?shadow=0` stops marching shadow rays; `?sky=<day|night|desert>` overrides the
 world's own sky and lighting preset (`src/render/sky.ts`); `?birds=0` turns the bird flock off in a world
-that has one; `?far=0` turns the far
+that has one; `?gizmo=0` starts without the axis cross in the corner, which is what a
+screenshot wants; `?far=0` turns the far
 field off (it is on by default) and `?far=steps|bricks|levels` picks a debug view
 (F queues every clipmap level again);
 `?farLevels=n` sets how many levels are allocated (and so the most the clipmap can
@@ -249,8 +264,8 @@ built the first time it is switched on, not at startup). Look by dragging
 (mouse or touch); the wheel flies towards and away from whatever the cursor is over
 (not along the view: a thing can be approached without turning to face it), and +/-
 change the speed. On-screen: a small panel top right with the frame rate, the switches worth reaching for
-(sky, far field, shadows, meshes, SDF preview, chunk grid, the follow flyover, the debug
-overlay), a line of what the world is currently holding (resident chunks and the voxels
+(sky, far field, shadows, meshes, SDF preview, chunk grid, the axis cross, the follow
+flyover, the debug overlay), a line of what the world is currently holding (resident chunks and the voxels
 they stand for, quads, clusters drawn against clusters live, far-field bricks) and, while
 a world is still compiling its pipelines, which stages are outstanding. The counts are
 built on the panel's own quarter-second tick, never in the frame path. The switches that are compiled into the shaders (the sky and shadows) reload
@@ -352,8 +367,9 @@ cannot be cross-origin isolated and its workers are on the copy path.
   missing one reader is silent, so each such format has a test that reads the shaders and
   checks the arithmetic: `src/world/block-table_test.ts` for the block table's four
   readers, `src/far/brick-layout_test.ts` for the brick and clipmap layout's three
-  (`far.wgsl`, `shadow.wgsl`, `far-build.wgsl`). Add the reader to the test in the same
-  change that adds the reader.
+  (`far.wgsl`, `shadow.wgsl`, `far-build.wgsl`), `src/render/birds_test.ts` for the bird
+  state buffer's three plus the `renderer.ts` that sizes them. Add the reader to the test
+  in the same change that adds the reader.
 - Baked per-corner values (AO, block light) join the mesher's merge key. Adding one
   fragments quads wherever it varies, which is a memory and draw cost, not just a
   shading one; measure the quad count, not only the frame time.
@@ -518,6 +534,12 @@ away here:
 - A new block texture is one entry in `TEXTURES` (`src/render/textures.ts`), painted
   in code; blocks name it in their `texture` triple as [top, side, bottom]. No image
   assets: textures are generated at startup.
+- A world's `spawn` is a measured anchor, not a view. The bench scenes are paths stated as
+  offsets from it, so moving it moves what every scene for that world measures and makes
+  the new numbers incomparable with the old ones. Never move a spawn to compose a nicer
+  opening shot: give the world a `start` instead, which is where the camera opens and
+  nothing else reads (`placeCamera()` in `src/main.ts`, overridden by `?at=`). Move a
+  spawn only when the terrain under it has moved, and re-measure the scenes when you do.
 - A new world is `src/worlds/<name>.wgsl` plus one line in `WORLDS`
   (`src/worlds/index.ts`), following design-formats.md "World program". Check it
   in the preview (P) first: an underestimated `WORLD_LIPSCHITZ` shows as holes there.

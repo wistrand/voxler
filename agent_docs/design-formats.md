@@ -25,6 +25,7 @@
 - Brush ops
 - Voxelizer output
 - Brick and clipmap
+- Bird state
 - Changing a format
 
 ## Coordinate spaces
@@ -564,6 +565,60 @@ shadow marcher the near field's fragment stage runs against the same buffers
 (`src/far/shadow.wgsl`, bound at group 2 there). The shadow marcher keeps its own copies
 of `brick_entry` and `cell_solid` because it is compiled into a different shader, so a
 change here is a change in both files.
+
+## Bird state
+
+The only thing in the engine that keeps state between frames rather than being a function
+of position and seed, and so the only buffer a compute pass both reads and writes across
+frames. One `GPUBuffer` holds every bird, `STORAGE | COPY_SRC` so the CPU can read it back
+for picking. 32 bytes a bird, two `vec4f`:
+
+```
+ 0  pos.xyz   world position, voxels (f32)
+12  pos.w     0 until the bird has been placed, non-zero after
+16  vel.xyz   velocity, voxels a second (f32)
+28  vel.w     wing phase, radians, integrated
+```
+
+`pos.w` is the placed flag, and it is what lets a zeroed buffer mean "not started" without
+a separate flag from the CPU: the step seeds a bird whose `w` is 0 and the draw and the
+pick both skip it.
+
+The wing phase is integrated rather than read off the clock, because the beat rate is not
+constant: it follows `bird_effort()`, the bird's climb angle, so a phase taken as
+`rate * time` would jump whenever the rate changed. That is also why the phase lives in
+this buffer and not in the camera uniform's clock.
+
+Absolute world positions as f32 here, which is the one place the engine allows it: the
+flock is kept within `HOME` voxels of the camera (`birds-common.wgsl`) and carried across
+the world when it leaves that box, so the values stay small whatever the camera's absolute
+position is. Nothing outside that box exists to be wrong.
+
+Layout order is flock by flock: `[0, WHITE)` are the flocking birds, `WHITE` of them in
+`FLOCKS` runs of `PER_FLOCK`, and `[WHITE, BIRDS)` are the hunters. One workgroup steps
+one flock, so the run boundaries are also the workgroup boundaries, and `isHunter(i)` is
+`i >= WHITE` and nothing else.
+
+Three readers, and no compiler connects them:
+
+| Reader                        | What it does                                          |
+| ----------------------------- | ----------------------------------------------------- |
+| `src/render/birds-step.wgsl`  | writes: boids, hunters, ground avoidance, the wrap    |
+| `src/render/birds.wgsl`       | reads in the vertex stage, builds the boxes           |
+| `src/render/birds.ts`         | reads a CPU copy: `pickBird()`, `describeBird()`      |
+
+A fourth file is not a reader but sizes what the readers get: `renderer.ts` turns the same
+constants into the buffer's size, the workgroup count and the instance count, and being
+out of step there is quiet in three different ways (too small a buffer is an out-of-bounds
+write, too few workgroups is a flock that never moves, too few instances is a flock with
+birds missing).
+
+`src/render/birds_test.ts` is what holds the four together: it reads
+`birds-common.wgsl`, `birds.ts` and `renderer.ts` as text and checks the constants agree,
+and reads `birds-step.wgsl` and `birds.wgsl` to check both halves of the wing beat are
+keyed to the same `bird_effort()`. Same hazard as a stride copied into a shader, so the
+same kind of test as `src/far/brick-layout_test.ts`. Add a field here and that test is the
+edit that comes after the shader and the TS.
 
 ## Changing a format
 
