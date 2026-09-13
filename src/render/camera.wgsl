@@ -12,7 +12,11 @@ struct Camera {
   chunk: vec4i,    // camera chunk coordinate; w unused
   offset: vec4f,   // eye position in render space, each component in [0, 32); w unused
   viewport: vec4f, // width, height, 1 / width, 1 / height in pixels
-  time: vec4f, // x: seconds, wrapped into WIND_PERIOD; yzw unused
+  // x: seconds wrapped into WIND_PERIOD, for anything that is a function of the clock
+  // (the wind). Wrapped, so every term it drives needs a period that divides the wrap or
+  // the wrap is a jump. y: this frame's length in seconds, clamped, for anything that
+  // integrates instead (the boids). zw unused.
+  time: vec4f,
 }
 
 @group(0) @binding(0) var<uniform> camera: Camera;

@@ -13,6 +13,12 @@ export const CAMERA_UNIFORM_SIZE = 256;
 // float still resolves under a microsecond.
 export const WIND_PERIOD = 8;
 
+// Longest frame the animation clock will admit, in seconds. A tab that was in the
+// background comes back with a gap of minutes in it, and anything integrating against
+// `dt` would take one enormous step; the frame loop already clamps the camera's own step
+// the same way (MAX_FRAME_DT in main.ts).
+export const MAX_ANIMATION_DT = 0.1;
+
 // Element indices into the uniform's 32-bit words.
 const VIEW = 0;
 const VIEW_PROJ = 16;
@@ -44,8 +50,9 @@ export class CameraUniform {
   }
 
   // `time` is seconds; it is wrapped into WIND_PERIOD here, so callers can pass a clock
-  // that has been running all session.
-  write(queue: GPUQueue, camera: FlyCamera, width: number, height: number, time = 0): void {
+  // that has been running all session. `dt` is the frame's own length, for anything that
+  // integrates rather than being a function of the clock (the boids in birds-step.wgsl).
+  write(queue: GPUQueue, camera: FlyCamera, width: number, height: number, time = 0, dt = 0): void {
     mat4.view(this.view, camera.offset, camera.basis);
     mat4.perspectiveReversedZ(this.proj, camera.fovY, width / height, camera.near);
     mat4.multiply(this.viewProj, this.proj, this.view);
@@ -70,7 +77,7 @@ export class CameraUniform {
     f[VIEWPORT + 2] = 1 / width;
     f[VIEWPORT + 3] = 1 / height;
     f[TIME] = time - Math.floor(time / WIND_PERIOD) * WIND_PERIOD;
-    f[TIME + 1] = 0;
+    f[TIME + 1] = Math.max(0, Math.min(MAX_ANIMATION_DT, dt));
     f[TIME + 2] = 0;
     f[TIME + 3] = 0;
     queue.writeBuffer(this.buffer, 0, this.data);

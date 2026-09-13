@@ -71,7 +71,18 @@ program, block light flood filled in the mesh job and baked per quad corner, per
 sky and lighting presets (`src/render/sky.ts`) including a night with a moon, and
 shadows marched against the far field's clipmap. The forest has grown since: four tree
 species over three leaf greens, mountains with a rock band and snow on top, waterfalls
-where a gorge and a steep step agree, and jellyfish in the water. What those cost to get
+where a gorge and a steep step agree, jellyfish in the water, and birds over it. The birds
+are the one thing in the engine that is neither in the world SDF nor in a chunk: they
+travel, and a chunk is voxelized once, so they are drawn from state a compute pass steps
+each frame (`src/render/birds-*.wgsl`, six flocks of boids and four hunters working them).
+Their wing beat follows the work they are doing: climbing beats fast through the whole arc,
+gliding down holds the wings out and rides. They stay off the ground by asking the far
+field's clipmap what is under them, which is the same occupancy the shadow rays march, so
+`?far=0` takes that away with the shadows. Clicking one picks it out (amber, and a line in
+the on-screen panel); clicking nothing clears it; and with one picked, the follow switch
+chases it instead of the ground.
+A world opts in with `birds` in `src/worlds/index.ts` and pays one more pipeline and two
+more passes for it; the passes cost under the GPU timer's resolution. What those cost to get
 right is in [plan-living-world.md](agent_docs/plan-living-world.md), and most of it was
 about scatter and rarity rather than about shapes.
 Main-thread cost per frame is flat in the resident chunk count; GPU cost follows
@@ -123,7 +134,7 @@ today `src/gpu/`, `src/render/`, `src/camera/`, `src/util/`, `src/debug/`,
 | `src/worlds/`    | world programs (`<name>.wgsl`, selected with `?world=`)        |
 | `src/brush/`     | brush records and op lists, the CPU and WGSL field folds, the voxel stage, the instance store, the edit tool |
 | `src/mesh/`      | binary greedy mesher, reference mesher, clusters, baked AO and block light, mesh job (worker-side, pure) |
-| `src/render/`    | arenas, cull and draw passes, Hi-Z, shading, sky presets, block textures |
+| `src/render/`    | arenas, cull and draw passes, Hi-Z, shading, sky presets, block textures, the bird flock |
 | `src/far/`       | brick builder, clipmaps, far-field march and composite, shadow rays, the adaptive reach |
 | `src/workers/`   | `WorkerPool`, job queue, buffer pool, the worker, job handlers |
 | `src/util/`      | math, ring buffers, timers                                     |
@@ -192,7 +203,8 @@ baked AO (the phase 5 A/B; it also drops the mesh job back to 6 neighbors); `?te
 draws flat block colors instead of sampling the block textures; `?glow=0` drops block
 emission, `?wind=0` holds swaying blocks still, `?light=0` meshes and draws without block
 light and `?shadow=0` stops marching shadow rays; `?sky=<day|night|desert>` overrides the
-world's own sky and lighting preset (`src/render/sky.ts`); `?far=0` turns the far
+world's own sky and lighting preset (`src/render/sky.ts`); `?birds=0` turns the bird flock off in a world
+that has one; `?far=0` turns the far
 field off (it is on by default) and `?far=steps|bricks|levels` picks a debug view
 (F queues every clipmap level again);
 `?farLevels=n` sets how many levels are allocated (and so the most the clipmap can
@@ -215,17 +227,24 @@ built the first time it is switched on, not at startup). Look by dragging
 (not along the view: a thing can be approached without turning to face it), and +/-
 change the speed. On-screen: a small panel top right with the frame rate, the switches worth reaching for
 (sky, far field, shadows, meshes, SDF preview, chunk grid, the follow flyover, the debug
-overlay) and, while a world is still compiling its pipelines, which stages are
-outstanding. The switches that are compiled into the shaders (the sky and shadows) reload
+overlay), a line of what the world is currently holding (resident chunks and the voxels
+they stand for, quads, clusters drawn against clusters live, far-field bricks) and, while
+a world is still compiling its pipelines, which stages are outstanding. The counts are
+built on the panel's own quarter-second tick, never in the frame path. The switches that are compiled into the shaders (the sky and shadows) reload
 the page carrying the camera in `?at=`; the rest flip on the running renderer.
+Click a bird to pick it out, and anywhere else to clear it; a drag is a look, not a click.
 Keys:
 F2 overlay (it starts hidden; an error or a bench run opens it),
-K follow flyover (`src/camera/follow.ts`: picks up whatever is under the camera and flies
-along it, which over a stream follows the stream; while it runs, +/- set its speed,
-Space/C raise and lower it, and dragging re-aims it, all through the same keys that fly
-the camera by hand. It never passes under a surface or through anything: a corridor
-probe ahead of the flight lifts it over what is coming, and `speed` is speed through the
-air, so a climb is taken out of the forward step rather than added to it),
+K follow, which follows two different things depending on what is picked. With a bird
+picked out by a click it chases that bird, trailing and looking at it, over a position
+that arrives a few frames late from the GPU (`Renderer.trackedBird`); Space/C move the
+camera up and down behind it, and clearing the selection ends the chase. With nothing
+picked it is the ground flyover (`src/camera/follow.ts`: picks up whatever is under the
+camera and flies along it, which over a stream follows the stream; while it runs, +/- set
+its speed, Space/C raise and lower it, and dragging re-aims it, all through the same keys
+that fly the camera by hand. It never passes under a surface or through anything: a
+corridor probe ahead of the flight lifts it over what is coming, and `speed` is speed
+through the air, so a climb is taken out of the forward step rather than added to it),
 P SDF preview, G grid, M meshes, F rebuild far-field bricks; editing: E place, Q remove, R rotate (Shift+R the
 other way), B block, X shape, Z undo, Y redo, aimed by the camera ray (overlay `edit`
 line).
@@ -469,8 +488,9 @@ away here:
 - A new world is `src/worlds/<name>.wgsl` plus one line in `WORLDS`
   (`src/worlds/index.ts`), following design-formats.md "World program". Check it
   in the preview (P) first: an underestimated `WORLD_LIPSCHITZ` shows as holes there.
-  That line also carries the world's sky preset and, when the defaults do not suit it,
-  its clipmap (`far`). Reach, cell size and fog density are one decision and not three:
+  That line also carries the world's sky preset, whether it has birds over it (`birds`,
+  `src/render/birds-common.wgsl`) and, when the defaults do not suit it, its clipmap
+  (`far`). Reach, cell size and fog density are one decision and not three:
   the fog has to have taken the view before the last level ends
   ([gotchas.md](agent_docs/gotchas.md) "A wider clipmap level can be cheaper than a
   narrower one"). The level count asked for here is a ceiling, trimmed at startup to the
@@ -488,6 +508,14 @@ away here:
   sway is for a thing attached at one end, flow for a surface that is going somewhere,
   and swaying a sheet of water pushes it into its neighbours and flickers
   ([gotchas.md](agent_docs/gotchas.md) "Animate flowing water with the texture").
+- Anything that travels is drawn, not voxelized, and anything that stays put is voxelized,
+  not drawn. A chunk is voxelized once and a brick sampled once, so a position that depends
+  on time would put every chunk it crosses back through the voxelizer every frame; the two
+  kinds of motion a block has (`sway` in the vertex stage, `flow` in the texture) animate a
+  thing that stays where it is. The birds are the only thing on the other side of that line
+  so far (`src/render/birds-common.wgsl`), and what it costs them is everything the world
+  gives a block for free: no chunk, no brick, no block id, no shadow, no place in the far
+  field, and a state buffer of their own to keep between frames.
 - Whether a placed object exists, what kind it is and how big it is are properties of the
   *object*, so read the world at the object's own base, never at the point being shaded.
   A world function sees one point at a time; a test that varies across a tree's own

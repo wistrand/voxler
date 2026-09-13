@@ -369,7 +369,8 @@ export function raiseHeight(height: number, by: number): number {
 
 // Fraction of the way to close on a target in `dt` seconds with time constant `tau`.
 // Frame-rate independent: the same second of flight lands in the same place at 30 Hz and
-// at 240 Hz, which a plain lerp per frame does not.
-function ease(dt: number, tau: number): number {
+// at 240 Hz, which a plain lerp per frame does not. Exported because everything that
+// moves a camera smoothly wants exactly this and there should be one of it.
+export function ease(dt: number, tau: number): number {
   return 1 - Math.exp(-dt / Math.max(tau, 1e-4));
 }

@@ -2,6 +2,13 @@
 // Renderer is discarded and rebuilt from CPU-side state.
 
 import cameraWgsl from "./camera.wgsl" with { type: "text" };
+import birdsWgsl from "./birds.wgsl" with { type: "text" };
+import birdsCommonWgsl from "./birds-common.wgsl" with { type: "text" };
+import birdsStepWgsl from "./birds-step.wgsl" with { type: "text" };
+import shadingWgsl from "./shading.wgsl" with { type: "text" };
+import shadowWgsl from "../far/shadow.wgsl" with { type: "text" };
+import { CounterReadback } from "../gpu/counters.ts";
+import { BIRD_FLOCKS, BIRD_STATE_BYTES, BIRD_STATE_FLOATS, BIRDS } from "./birds.ts";
 import gizmoWgsl from "./gizmo.wgsl" with { type: "text" };
 import gridWgsl from "./grid.wgsl" with { type: "text" };
 import skyColorWgsl from "./sky-color.wgsl" with { type: "text" };
@@ -46,22 +53,34 @@ const CAMERA_SOURCE: ShaderSource = { name: "camera.wgsl", code: cameraWgsl };
 // Timed passes, in GpuTimer index order. The near field runs in two phases
 // (plan-rendering phase 4): cull A, draw A, Hi-Z build, cull B, draw B. "main"
 // draws the background (preview blit or sky) behind them, then the grid and gizmo.
+// These are indices into TIMED_PASSES below and have to stay in step with it: adding a
+// pass in the middle renumbers every one after it.
 const PASS_PREVIEW = 0;
 const PASS_CULL_A = 1;
 const PASS_NEAR_A = 2;
-const PASS_HIZ = 3;
-const PASS_CULL_B = 4;
-const PASS_NEAR_B = 5;
-const PASS_MAIN = 6;
-const PASS_CULL_T = 7;
-const PASS_NEAR_T = 8;
-const PASS_FAR = 9;
-const PASS_FAR_BUILD = 10;
-const PASS_FAR_BEAM = 11;
+const PASS_BIRDS_STEP = 3;
+const PASS_BIRDS = 4;
+const PASS_HIZ = 5;
+const PASS_CULL_B = 6;
+const PASS_NEAR_B = 7;
+const PASS_MAIN = 8;
+const PASS_CULL_T = 9;
+const PASS_NEAR_T = 10;
+const PASS_FAR = 11;
+const PASS_FAR_BUILD = 12;
+const PASS_FAR_BEAM = 13;
+// Three boxes to a bird (a body and two wings), 36 vertices to a box. The flock's shape
+// is in `src/render/birds.ts`, beside the picker that needs the same numbers.
+const BIRD_INSTANCES = BIRDS * 3;
+const CUBE_VERTICES = 36;
+const NO_PICK = 0xffff; // a bird index no bird has
+
 const TIMED_PASSES = [
   "preview",
   "cull.a",
   "near.a",
+  "birds.step",
+  "birds",
   "hiz",
   "cull.b",
   "near.b",
@@ -154,6 +173,91 @@ export class Renderer {
   private depthTexture: GPUTexture | null = null;
   private width = 0;
   private height = 0;
+  // Birds, when the world asks for them (`birds` in src/worlds/index.ts). Null in a
+  // world without them, so nothing is compiled and nothing is encoded.
+  private birdPipeline: GPURenderPipeline | null = null;
+  private birdStep: GPUComputePipeline | null = null;
+  private birdState: GPUBuffer | null = null;
+  private birdDraw: GPUBindGroup | null = null;
+  private birdWrite: GPUBindGroup | null = null;
+  private birdGround: GPUBindGroup | null = null;
+  private birdPick: GPUBuffer | null = null;
+  private birdStaging: GPUBuffer | null = null;
+  private birdReading = false;
+  private pickedBird = -1;
+  private readonly pickScratch = new Uint32Array(4);
+  private birdTrack: CounterReadback | null = null;
+  private trackFloats: Float32Array | null = null;
+  private tracked = -1;
+  private trackSamples = -1;
+  showBirds = true;
+  private lastTime = -1; // seconds, for the frame's dt
+
+  // The flock's state, for reading back (`BIRDS` records of two vec4f: position with a
+  // placed flag, then velocity with the wing phase). Null in a world without birds.
+  get birds(): GPUBuffer | null {
+    return this.birdState;
+  }
+
+  // Keeps a fresh copy of one bird's state coming back from the GPU, for a camera that
+  // wants to follow it. Set to -1 to stop. The copy lands a few frames late, which at a
+  // bird's speed is half a voxel and is the price of not awaiting a readback in the frame
+  // path (CLAUDE.md).
+  trackBird(index: number): void {
+    this.tracked = index >= 0 && index < BIRDS ? index : -1;
+    if (this.tracked < 0) this.trackSamples = -1;
+  }
+
+  // The tracked bird's last arrived state: position in 0..2 and velocity in 4..6, as the
+  // buffer holds it. Null until one has arrived, and null again when tracking stops.
+  get trackedBird(): Float32Array | null {
+    if (this.tracked < 0 || this.birdTrack === null) return null;
+    return this.birdTrack.samples > this.trackSamples ? this.trackFloats : null;
+  }
+
+  // The bird drawn picked out, or -1. Set by whatever did the picking (main.ts, from a
+  // click); the draw reads it out of a uniform.
+  get picked(): number {
+    return this.pickedBird;
+  }
+
+  // `index` out of range clears the selection.
+  selectBird(index: number): void {
+    const bird = index >= 0 && index < BIRDS ? index : -1;
+    this.pickedBird = bird;
+    if (this.birdPick === null) return;
+    this.pickScratch[0] = bird < 0 ? NO_PICK : bird;
+    this.gpu.device.queue.writeBuffer(this.birdPick, 0, this.pickScratch);
+  }
+
+  // A copy of the flock's state, or null in a world without birds or while a read is
+  // already in flight. Not for the frame path: it maps a buffer, which resolves frames
+  // later (CLAUDE.md "Never await a GPU readback in the frame path"). A click is a
+  // gesture, and by the time this lands the birds have moved about half a voxel.
+  async readBirds(): Promise<Float32Array | null> {
+    const state = this.birdState;
+    if (state === null || this.birdReading) return null;
+    this.birdReading = true;
+    try {
+      const device = this.gpu.device;
+      this.birdStaging ??= device.createBuffer({
+        label: "birds readback",
+        size: BIRD_STATE_BYTES,
+        usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
+      });
+      const encoder = device.createCommandEncoder({ label: "birds readback" });
+      encoder.copyBufferToBuffer(state, 0, this.birdStaging, 0, BIRD_STATE_BYTES);
+      device.queue.submit([encoder.finish()]);
+      await this.birdStaging.mapAsync(GPUMapMode.READ);
+      const out = new Float32Array(this.birdStaging.getMappedRange().slice(0));
+      this.birdStaging.unmap();
+      return out;
+    } catch {
+      return null; // a device loss mid-read; the caller simply picks nothing
+    } finally {
+      this.birdReading = false;
+    }
+  }
   private gizmoX = 0;
   private gizmoY = 0;
   private gizmoSize = 0;
@@ -167,6 +271,7 @@ export class Renderer {
   private readonly nearBDepth: GPURenderPassDepthStencilAttachment;
   private readonly nearTDescriptor: GPURenderPassDescriptor;
   private readonly nearBDescriptor: GPURenderPassDescriptor; // phase B: loads
+  private readonly birdDescriptor: GPURenderPassDescriptor;
   private readonly colorAttachment: GPURenderPassColorAttachment;
   private readonly depthAttachment: GPURenderPassDepthStencilAttachment;
   private readonly passDescriptor: GPURenderPassDescriptor;
@@ -194,7 +299,10 @@ export class Renderer {
       label: "frame",
       entries: [{
         binding: 0,
-        visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT,
+        // Compute as well: the boid step reads the camera and the frame's dt out of the
+        // same uniform every other pass reads, and a stage left out here makes the
+        // pipeline invalid with no error of its own, only "a previous error".
+        visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT | GPUShaderStage.COMPUTE,
         buffer: { type: "uniform" },
       }],
     });
@@ -230,6 +338,13 @@ export class Renderer {
     };
     this.nearBDescriptor = {
       label: "near b",
+      colorAttachments: [this.nearBColor],
+      depthStencilAttachment: this.nearBDepth,
+    };
+    // Birds share the near field's colour and depth, loaded and stored, and draw whether
+    // or not there are meshes: `?mesh=0` leaves the sky, and birds are still in it.
+    this.birdDescriptor = {
+      label: "birds",
       colorAttachments: [this.nearBColor],
       depthStencilAttachment: this.nearBDepth,
     };
@@ -280,7 +395,7 @@ export class Renderer {
       if (failure) report(`draw builtins self-test failed: ${failure}`);
     }));
     const overlayAt = performance.now();
-    const [skyModule, gridModule, gizmoModule] = await Promise.all([
+    const [skyModule, gridModule, gizmoModule, birdsModule, birdStepModule] = await Promise.all([
       compileShader(device, "sky", [
         CAMERA_SOURCE,
         { name: "sky.wgsl (generated)", code: skyConstantsWgsl(this.world.sky) },
@@ -289,8 +404,31 @@ export class Renderer {
       ], report),
       compileShader(device, "grid", [CAMERA_SOURCE, { name: "grid.wgsl", code: gridWgsl }], report),
       compileShader(device, "gizmo", [CAMERA_SOURCE, { name: "gizmo.wgsl", code: gizmoWgsl }], report),
+      // Birds are lit and fogged by the one lighting model like every other surface, so
+      // they carry the same sky constants the near field does.
+      this.world.birds
+        ? compileShader(device, "birds", [
+          CAMERA_SOURCE,
+          { name: "sky.wgsl (generated)", code: skyConstantsWgsl(this.world.sky) },
+          { name: "sky-color.wgsl", code: skyColorWgsl },
+          { name: "shading.wgsl", code: shadingWgsl },
+          { name: "render/birds-common.wgsl", code: birdsCommonWgsl },
+          { name: "render/birds.wgsl", code: birdsWgsl },
+        ], report)
+        : Promise.resolve(null),
+      this.world.birds
+        ? compileShader(device, "birds step", [
+          CAMERA_SOURCE,
+          // The clipmap, for the one thing the flock cannot work out for itself: where
+          // the ground is. Same bindings the near field's shadow rays read.
+          { name: "far/shadow.wgsl", code: shadowWgsl },
+          { name: "render/birds-common.wgsl", code: birdsCommonWgsl },
+          { name: "render/birds-step.wgsl", code: birdsStepWgsl },
+        ], report)
+        : Promise.resolve(null),
     ]);
     if (!skyModule || !gridModule || !gizmoModule) return false;
+    if (this.world.birds && (!birdsModule || !birdStepModule)) return false;
 
     const overlayDepth: GPUDepthStencilState = {
       format: DEPTH_FORMAT,
@@ -341,6 +479,107 @@ export class Renderer {
       }, report),
     ]);
     if (!sky || !grid || !gizmo) return false;
+    if (birdsModule !== null && birdStepModule !== null) {
+      // The flock's state, which is the one thing in the frame that survives from the
+      // last one: a boid is defined by what its neighbours are doing, and no function of
+      // position and time can answer that. A fresh buffer is zeroed, and a zeroed `pos.w`
+      // is what tells the step to place the birds, so there is nothing to seed from here.
+      this.birdState = device.createBuffer({
+        label: "birds",
+        size: BIRD_STATE_BYTES,
+        // COPY_SRC so the flock can be read back and checked: it is the one thing in the
+        // frame with state, and a rule that is wrong in it is wrong for as long as the
+        // page is open rather than for one frame.
+        usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,
+      });
+      // Two layouts over the one buffer: the step writes it, and a vertex stage may only
+      // read one.
+      const write = device.createBindGroupLayout({
+        label: "birds write",
+        entries: [{ binding: 0, visibility: GPUShaderStage.COMPUTE, buffer: { type: "storage" } }],
+      });
+      const read = device.createBindGroupLayout({
+        label: "birds read",
+        entries: [
+          { binding: 0, visibility: GPUShaderStage.VERTEX, buffer: { type: "read-only-storage" } },
+          { binding: 1, visibility: GPUShaderStage.VERTEX, buffer: { type: "uniform" } },
+        ],
+      });
+      // Which bird a click picked. The CPU chooses and the draw reads, which is the other
+      // way round from the state buffer, so it is a uniform of its own rather than a
+      // field in one the step owns.
+      this.birdPick = device.createBuffer({
+        label: "birds picked",
+        size: 16,
+        usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+      });
+      this.selectBird(NO_PICK);
+      this.birdWrite = device.createBindGroup({
+        label: "birds write",
+        layout: write,
+        entries: [{ binding: 0, resource: { buffer: this.birdState } }],
+      });
+      this.birdDraw = device.createBindGroup({
+        label: "birds read",
+        layout: read,
+        entries: [
+          { binding: 0, resource: { buffer: this.birdState } },
+          { binding: 1, resource: { buffer: this.birdPick } },
+        ],
+      });
+      // Opaque, depth-tested and depth-writing against the near field's own buffer, so
+      // terrain hides a bird and two birds sort against each other. No back-face culling:
+      // the boxes are built in the vertex stage and their winding is not worth the
+      // bookkeeping for three hundred triangles.
+      const birds = await createRenderPipeline(device, {
+        label: "birds",
+        layout: device.createPipelineLayout({ label: "birds", bindGroupLayouts: [this.frameLayout, read] }),
+        vertex: { module: birdsModule, entryPoint: "vs" },
+        fragment: { module: birdsModule, entryPoint: "fs", targets: [{ format }] },
+        depthStencil: { format: DEPTH_FORMAT, depthWriteEnabled: true, depthCompare: "greater" },
+      }, report);
+      if (!birds) return false;
+      this.birdPipeline = birds;
+      device.pushErrorScope("validation");
+      // Group 2 is the clipmap, at the same bindings shadow.wgsl declares for the near
+      // field's rays, with its own layout because that one is visible to the fragment
+      // stage and this is compute. The buffers exist whatever `?far=0` says; what changes
+      // is whether anything has been written into them, and the step asks.
+      const ground = device.createBindGroupLayout({
+        label: "birds ground",
+        entries: [
+          { binding: 0, visibility: GPUShaderStage.COMPUTE, buffer: { type: "uniform" } },
+          { binding: 1, visibility: GPUShaderStage.COMPUTE, buffer: { type: "read-only-storage" } },
+          { binding: 2, visibility: GPUShaderStage.COMPUTE, buffer: { type: "read-only-storage" } },
+        ],
+      });
+      this.birdGround = device.createBindGroup({
+        label: "birds ground",
+        layout: ground,
+        entries: this.far.shadowResources().map((buffer, binding) => ({ binding, resource: { buffer } })),
+      });
+      // One bird's worth of state, coming back on the same kind of ring the frame
+      // counters use: a copy a frame, read frames later, never awaited.
+      this.birdTrack = new CounterReadback(device, "bird", BIRD_STATE_FLOATS);
+      this.trackFloats = new Float32Array(this.birdTrack.latest.buffer);
+      this.birdStep = device.createComputePipeline({
+        label: "birds step",
+        layout: device.createPipelineLayout({
+          label: "birds step",
+          bindGroupLayouts: [this.frameLayout, write, ground],
+        }),
+        compute: { module: birdStepModule, entryPoint: "step" },
+      });
+      // Or an invalid pipeline reaches the encoder and every frame after it fails with
+      // "a previous error", which says nothing about what the previous error was.
+      const stepError = await device.popErrorScope();
+      if (stepError) {
+        report(`birds step pipeline: ${stepError.message}`);
+        this.birdStep = null;
+        this.birdPipeline = null;
+        return false;
+      }
+    }
     this.startup.sky = performance.now() - overlayAt;
     this.pipelines = { sky, grid, gizmo };
     // Not the preview: it is optional, it is the slowest thing here to compile, and
@@ -439,7 +678,12 @@ export class Renderer {
     counters.draws = 0;
     counters.uploadBytes = 0;
 
-    this.cameraUniform.write(device.queue, camera, this.width, this.height, this.time);
+    // The frame's own length, for anything that integrates state rather than being a
+    // function of the clock (the boids). Taken here rather than passed in, because
+    // `time` is the only clock the renderer is given.
+    const dt = this.lastTime < 0 ? 0 : this.time - this.lastTime;
+    this.lastTime = this.time;
+    this.cameraUniform.write(device.queue, camera, this.width, this.height, this.time, dt);
     counters.uploadBytes += CAMERA_UNIFORM_SIZE;
     const farUpload = this.showFar ? this.far.stats.uploadBytes : 0;
     counters.uploadBytes += farUpload;
@@ -486,6 +730,36 @@ export class Renderer {
       this.near.draw(passB, 1);
       passB.end();
       counters.draws++;
+    }
+    // Birds after the near field's depth is complete and before the far field marches,
+    // which reads that depth to skip pixels the raster pass already covered: a bird that
+    // has written depth hides the far field behind it, which is why the flock is kept
+    // inside the meshed radius where the depth buffer holds real terrain.
+    if (this.birdPipeline !== null && this.birdStep !== null && this.showBirds) {
+      // One workgroup a flock, and one more for the hunters.
+      const stepPass = encoder.beginComputePass({
+        label: "birds step",
+        timestampWrites: timedCompute(PASS_BIRDS_STEP),
+      });
+      stepPass.setPipeline(this.birdStep);
+      stepPass.setBindGroup(0, this.frameBindGroup);
+      stepPass.setBindGroup(1, this.birdWrite!);
+      stepPass.setBindGroup(2, this.birdGround!);
+      stepPass.dispatchWorkgroups(BIRD_FLOCKS + 1);
+      stepPass.end();
+      this.birdDescriptor.timestampWrites = this.timer.passWrites(PASS_BIRDS);
+      const birdPass = encoder.beginRenderPass(this.birdDescriptor);
+      birdPass.setBindGroup(0, this.frameBindGroup);
+      birdPass.setBindGroup(1, this.birdDraw!);
+      birdPass.setPipeline(this.birdPipeline);
+      birdPass.draw(CUBE_VERTICES, BIRD_INSTANCES);
+      birdPass.end();
+      counters.draws++;
+      // One bird back to the CPU, for a camera following it. Encoded here and mapped
+      // after the submit, like every other readback in the frame.
+      if (this.tracked >= 0 && this.birdTrack !== null) {
+        this.birdTrack.copy(encoder, this.birdState!, this.tracked * BIRD_STATE_FLOATS * 4);
+      }
     }
     // Before the background paints over the near field: compare it against an
     // unculled draw of the same frame.
@@ -557,5 +831,6 @@ export class Renderer {
     device.queue.submit(this.commandBuffers);
     this.timer.afterSubmit();
     this.near.afterSubmit();
+    if (this.tracked >= 0) this.birdTrack?.afterSubmit();
   }
 }

@@ -902,3 +902,82 @@ which had been added later, so switching the flyover off and on again started th
 flight mid-climb. The test for it compares a restarted flight against a fresh one step for
 step, which is stronger than asserting it does not move: the first step may well turn and
 climb, it just must not inherit the last flight's rates.
+
+### A bind group layout that forgets a shader stage gives you "a previous error"
+
+The boid step is a compute pass that reads the camera uniform, which every other pass
+reads too, so it binds the renderer's own frame bind group. That layout declared
+`VERTEX | FRAGMENT` visibility, because until then nothing in compute had wanted it. The
+result is not a message about the camera or about visibility. `createComputePipeline`
+returns an object that is already invalid, the failure surfaces frames later at the
+encoder, and all it says is:
+
+```
+[Invalid ComputePipeline "birds step"] is invalid due to a previous error.
+```
+
+The previous error is never printed, because nothing asked for it. Two habits close the
+gap: wrap a pipeline built outside `createRenderPipeline()` in a `pushErrorScope` /
+`popErrorScope` and report what comes back (`Renderer.init` does this for the boid step),
+and when adding the first compute reader of a shared bind group, check its `visibility`
+before anything else.
+
+### A flock is state, and state is the thing this engine does not have
+
+Everything else in a voxler world is a pure function of position, seed and time, which is
+what lets the voxelizer, the preview and the far field agree without talking to each
+other. Boids are not: a bird's next heading is a function of what its neighbours are
+doing, and no function of position can answer that. So the flock is the one thing in the
+frame that survives from the last one, in a storage buffer a compute pass steps
+(`src/render/birds-step.wgsl`).
+
+What that costs, and what it buys back:
+
+- **Nothing seeds the buffer.** A fresh GPU buffer is zeroed, and a zeroed `pos.w` is what
+  tells the step to place a bird, so there is no upload, no init pipeline and nothing to
+  redo after a device loss.
+- **The flock is carried, not respawned.** When it drifts past `HOME` voxels from the
+  camera it is translated by the whole box, one axis at a time, so its shape survives the
+  trip; the draw has already faded it to nothing out there, so the carry is invisible.
+- **The neighbourhood is the whole flock**, one workgroup to a flock, loaded into
+  workgroup memory once. At twenty-four birds that is 576 pair tests a flock a frame. A
+  radius query would need a grid, and a grid is more machinery than four dozen birds are
+  worth.
+- **Birds are kept inside the near field's meshed radius.** They test and write the near
+  field's depth and draw before the far field marches, and the far field composites by
+  depth rather than testing against it, so a bird further out than the depth buffer holds
+  real terrain would be drawn in front of a hill it is behind.
+
+### The flock is the first thing that had to know where the ground is
+
+Birds fly in a band of absolute heights, which says nothing about the terrain: the
+forest's mountains stand well through it. Three ways to give a drawn object a ground
+height, and only one of them was small:
+
+- **Sample the world SDF.** Correct anywhere, and it means compiling the world module into
+  another pipeline. The forest's takes 140 ms cold and the monument's 1.4 s.
+- **Keep a heightfield on the CPU.** The chunk store is already there and the column probe
+  is already cheap (`ChunkStore.blockAtSlot`), but a scrolling field with incremental
+  refill is a clipmap by another name.
+- **Ask the clipmap that already exists.** The far field holds the world around the camera
+  as occupancy, and `shadow.wgsl` already binds it for the near field's shadow rays. A
+  point test (`sh_solid_at`) is a dozen lines beside the ray march, and the flock's step
+  binds the same three buffers at group 2. No new data, no CPU work, nothing to keep in
+  step. `?far=0` leaves the buffers unwritten, `counts.x` is 0, and the birds fall back to
+  the absolute band, which is the same degradation the shadows already take.
+
+Three things were needed before it held, and the first two on their own did not:
+
+- **Probe ahead, not just down.** A slope rising into a bird flying level has nothing
+  under the bird until far too late. The probes run under the bird and under where it will
+  be a second from now.
+- **Put the lift outside the steering clamp.** Everything else in a flock is a preference
+  and is clamped together; this is not one. Clamped with the rest, the boid terms diluted
+  it and a bird still ended up four voxels inside a hillside.
+- **Keep a bounded escape.** Ground can arrive faster than a bird can climb: a chunk that
+  streams in under it, a cliff met square on. The step walks up out of solid rock in
+  bounded steps, which does nothing on the frames that matter.
+
+Checked by reading the flock back and asking the *chunk store* for the ground, which is a
+different source from the clipmap the step asks: 1776 samples over twenty seconds, none
+below the surface, tightest clearance 1.1 voxels.

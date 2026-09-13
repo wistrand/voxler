@@ -6,12 +6,13 @@ import { type BenchContext, BenchSession } from "./bench/session.ts";
 import { VoxelBench } from "./bench/voxel-bench.ts";
 import { FlyCamera } from "./camera/camera.ts";
 import { FlyControls } from "./camera/controls.ts";
-import { Follow, type FollowState, raiseHeight } from "./camera/follow.ts";
+import { ease, Follow, type FollowState, raiseHeight } from "./camera/follow.ts";
 import { Hud, type HudButton } from "./debug/hud.ts";
 import { Overlay } from "./debug/overlay.ts";
 import { CPU_FRAME, CPU_RENDER, CPU_UPDATE, Stats } from "./debug/stats.ts";
 import { formatCaps } from "./gpu/caps.ts";
 import { createGpu, type Gpu } from "./gpu/device.ts";
+import { describeBird, NO_BIRD, pickBird } from "./render/birds.ts";
 import { Renderer } from "./render/renderer.ts";
 import { DEFAULT_JOBS_PER_MESSAGE, WorkerPool } from "./workers/pool.ts";
 import type { CompressInput, CompressOutput } from "./workers/jobs.ts";
@@ -32,7 +33,7 @@ import { DEFAULT_ADAPT_OPTIONS, FarAdapt } from "./far/adapt.ts";
 import type { BrickJobOutput } from "./far/brick-job.ts";
 import { canShareMemory } from "./workers/buffers.ts";
 import { BLOCKS } from "./world/blocks.ts";
-import { voxelIndex } from "./world/coords.ts";
+import { CHUNK_VOLUME, voxelIndex } from "./world/coords.ts";
 import { ChunkStore } from "./world/store.ts";
 import { chunkInRange, chunkKey, keyX, keyY, keyZ } from "./world/keys.ts";
 import { DEFAULT_MESH_OPTIONS, MESH_JOB, MeshScheduler } from "./world/mesh-scheduler.ts";
@@ -102,6 +103,7 @@ const CONTROLS_HELP = "drag: look (mouse or touch)  WASD move  Space/C up/down  
   "?glow=0 no emission  ?wind=0 no sway  ?light=0 no block light  ?shadow=0 no shadows\n" +
   `?sky=${Object.keys(SKIES).join("|")} overrides the world's own sky\n` +
   "?far=0 no far field  ?far=steps|bricks|levels debug view (F rebuilds it)  ?farScale=0.1..1\n" +
+  "?birds=0 no birds (the forest has them)\n" +
   "?farLevels=n ?farSize=n ?farFirst=k ?farBricks=n ?farSlabs=n ?farBeam=0  ?farAdapt=0  ?farCheck\n" +
   `?bench=${Object.keys(SCENES).join("|")}&runs=n benchmark`;
 
@@ -183,6 +185,8 @@ function selectWorld(): WorldProgram {
     spawn: entry.spawn,
     sky,
     far: entry.far,
+    // `?birds=0` turns them off, for a frame with one fewer pass in it.
+    birds: entry.birds === true && params.get("birds") !== "0",
   };
 }
 
@@ -687,6 +691,25 @@ function frame(now: number): void {
   stats.begin(CPU_UPDATE);
   if (bench) {
     if (renderer && benchReady(renderer, now)) bench.drive(now, camera, renderer.timer);
+  } else if (chasing) {
+    // The keys that raise and lower the ground flyover raise and lower this too, and a
+    // selection that has been cleared or moved to another bird ends or moves the chase.
+    controls.update(dt);
+    const picked = renderer?.picked ?? -1;
+    if (picked < 0) {
+      stopChase();
+    } else {
+      if (picked !== chased) {
+        chased = picked;
+        renderer!.trackBird(picked);
+      }
+      const lift = controls.vertical;
+      if (lift !== 0) {
+        chaseHeight = Math.max(-20, Math.min(120, chaseHeight + lift * controls.speed * dt));
+      }
+      const bird = renderer?.trackedBird ?? null;
+      if (bird !== null) chaseStep(bird, dt);
+    }
   } else if (following) {
     // The controls run first and the flight picks up whatever they did, so dragging the
     // view re-aims it and WASD nudges it sideways rather than being fought.
@@ -900,6 +923,23 @@ try {
   resizeObserver.observe(canvas); // browsers without device-pixel-content-box
 }
 
+// A click on the canvas, alongside the camera's own drag handling: the controls capture
+// the pointer for looking, which does not stop a second listener on the same element.
+canvas.addEventListener("pointerdown", (e) => {
+  clickId = e.pointerId;
+  clickX = e.clientX;
+  clickY = e.clientY;
+});
+canvas.addEventListener("pointerup", (e) => {
+  if (e.pointerId !== clickId) return;
+  clickId = -1;
+  if (Math.hypot(e.clientX - clickX, e.clientY - clickY) > CLICK_SLOP_PX) return;
+  void pickBirdAt(e.clientX, e.clientY);
+});
+canvas.addEventListener("pointercancel", () => {
+  clickId = -1;
+});
+
 // The follow-the-ground flyover (src/camera/follow.ts). It reads the chunk store, so it
 // follows whatever the near field has streamed; outside that it holds its heading.
 const followState: FollowState = { x: 0, y: 0, z: 0, yaw: 0, pitch: 0 };
@@ -930,9 +970,81 @@ const follow = new Follow((x, y, z) => {
 });
 let following = false;
 
+// Chasing the bird a click picked out, which is what the follow switch does when there is
+// one: trailing it and looking at it, over a position that arrives a few frames late from
+// the GPU (`Renderer.trackedBird`). At a bird's speed that lag is half a voxel.
+// Far enough back to be behind the *flock*, not inside it: a bird's neighbours sit within
+// twenty voxels of it, and a camera closer than that ends up in the middle of them with
+// the one it is following a speck beyond.
+const CHASE_BACK = 52; // voxels behind it
+const CHASE_UP = 14; // and over it, before Space/C move that
+const CHASE_POSITION = 0.30; // seconds to close on where the camera should be
+const CHASE_AIM = 0.20; // and on where it should look
+let chasing = false;
+let chased = -1; // the bird the renderer is keeping a copy of
+let chaseHeight = CHASE_UP;
+
+function startChase(bird: number): void {
+  chasing = true;
+  following = false;
+  chaseHeight = CHASE_UP;
+  chased = bird;
+  globalThis.voxler.renderer?.trackBird(bird);
+}
+
+function stopChase(): void {
+  chasing = false;
+  chased = -1;
+  globalThis.voxler.renderer?.trackBird(-1);
+}
+
+// Eases an angle the short way round, so a heading crossing the back of the compass does
+// not take the long way.
+function easeAngle(from: number, to: number, amount: number): number {
+  let d = to - from;
+  while (d > Math.PI) d -= 2 * Math.PI;
+  while (d < -Math.PI) d += 2 * Math.PI;
+  return from + d * amount;
+}
+
+// One frame of the chase. The bird's own heading sets where the camera sits, so it trails
+// rather than orbiting, and the camera always looks at the bird itself.
+function chaseStep(bird: Float32Array, dt: number): void {
+  const speed = Math.hypot(bird[4], bird[5], bird[6]);
+  const back = speed > 1e-4 ? CHASE_BACK / speed : 0;
+  const wantX = bird[0] - bird[4] * back;
+  const wantY = bird[1] - bird[5] * back + chaseHeight;
+  const wantZ = bird[2] - bird[6] * back;
+  const k = ease(dt, CHASE_POSITION);
+  const x = camera.worldPosition(0) + (wantX - camera.worldPosition(0)) * k;
+  const y = camera.worldPosition(1) + (wantY - camera.worldPosition(1)) * k;
+  const z = camera.worldPosition(2) + (wantZ - camera.worldPosition(2)) * k;
+  camera.setPosition(x, y, z);
+  const dx = bird[0] - x, dy = bird[1] - y, dz = bird[2] - z;
+  const flat = Math.hypot(dx, dz);
+  const a = ease(dt, CHASE_AIM);
+  camera.setOrientation(
+    easeAngle(camera.yaw, Math.atan2(-dx, -dz), a),
+    camera.pitch + (Math.atan2(dy, flat) - camera.pitch) * a,
+  );
+}
+
 function toggleFollow(): void {
-  following = !following;
-  if (!following) return;
+  if (chasing) {
+    stopChase();
+    return;
+  }
+  if (following) {
+    following = false;
+    return;
+  }
+  // A picked bird is what the switch follows; without one it follows the ground.
+  const bird = globalThis.voxler.renderer?.picked ?? -1;
+  if (bird >= 0) {
+    startChase(bird);
+    return;
+  }
+  following = true;
   followState.x = camera.worldPosition(0);
   followState.y = camera.worldPosition(1);
   followState.z = camera.worldPosition(2);
@@ -997,6 +1109,82 @@ function cycleSky(): void {
 globalThis.voxler.controls = controls;
 globalThis.voxler.follow = follow;
 
+// Clicking a bird picks it out. A click is a pointer that went down and came up in about
+// the same place; anything further is a drag of the view, which is what the canvas is
+// mostly for. The flock lives on the GPU, so the pick reads it back and resolves a few
+// frames later, by which time the birds have moved about half a voxel.
+const CLICK_SLOP_PX = 5;
+let clickId = -1;
+let clickX = 0;
+let clickY = 0;
+
+async function pickBirdAt(clientX: number, clientY: number): Promise<void> {
+  const renderer = globalThis.voxler.renderer;
+  if (!renderer || renderer.birds === null) return;
+  // The cursor as NDC over the canvas as it is displayed, and the aspect from the render
+  // target rather than the rect: when `?size=` makes the two disagree the image is
+  // stretched and the ray through a pixel has to be stretched with it (controls.ts).
+  const rect = canvas.getBoundingClientRect();
+  if (rect.width <= 0 || rect.height <= 0) return;
+  const aspect = canvas.height > 0 ? canvas.width / canvas.height : 1;
+  const ndcX = ((clientX - rect.left) / rect.width) * 2 - 1;
+  const ndcY = 1 - ((clientY - rect.top) / rect.height) * 2;
+  camera.rayThrough(ndcX, ndcY, aspect, pickDir);
+  const state = await renderer.readBirds();
+  if (state === null) return;
+  const hit = pickBird(
+    state,
+    camera.worldPosition(0),
+    camera.worldPosition(1),
+    camera.worldPosition(2),
+    pickDir[0],
+    pickDir[1],
+    pickDir[2],
+    BIRD_PICK_REACH,
+  );
+  renderer.selectBird(hit);
+  pickedText = hit === NO_BIRD ? "" : describeBird(state, hit);
+}
+
+// How far a click reaches for a bird, in voxels. Past the flock's own box there is
+// nothing to hit (`HOME` in birds-common.wgsl).
+const BIRD_PICK_REACH = 320;
+const pickDir = new Float64Array(3);
+let pickedText = "";
+
+// What the world is holding, for the always-on panel: how much of it is resident, how
+// much geometry that came to, and how much of that the GPU kept after culling. Built on
+// the panel's own quarter-second tick, never in the frame path.
+function amount(n: number): string {
+  if (n >= 1e9) return `${(n / 1e9).toFixed(1)}B`;
+  if (n >= 1e6) return `${(n / 1e6).toFixed(1)}M`;
+  if (n >= 1e3) return `${(n / 1e3).toFixed(1)}k`;
+  return `${n}`;
+}
+
+function describeCounts(): string {
+  const renderer = globalThis.voxler.renderer;
+  if (!renderer) return "";
+  const parts: string[] = [];
+  if (streaming) {
+    const chunks = streamer.stats.resident;
+    // A chunk is 32^3, so this is the volume the near field is actually holding, which is
+    // the number people mean when they ask how big the world on screen is.
+    parts.push(`${amount(chunks)} chunks`, `${amount(chunks * CHUNK_VOLUME)} voxels`);
+  }
+  if (renderer.showMeshes && renderer.near.ready) {
+    const near = renderer.near.refreshStats();
+    parts.push(`${amount(near.realQuads)} quads`, `${amount(near.visibleClusters)}/${amount(near.liveClusters)} clusters`);
+  }
+  if (renderer.showFar && renderer.far.ready) {
+    parts.push(`${amount(renderer.far.stats.bricks)} bricks`);
+  }
+  // The bird a click picked out, if one is. Its own line: it is about one thing and the
+  // rest of the row is about all of them.
+  const counts = parts.join("  ");
+  return pickedText === "" ? counts : `${counts}\n${pickedText}`;
+}
+
 const hud = new Hud(document.body, [
   { label: "sky", title: "Day, night or desert. Reloads: the sky is compiled into the shaders", on: () => true, press: cycleSky },
   { label: "far", title: "Far field (the ray-marched distance)", on: () => globalThis.voxler.renderer?.showFar ?? false, press: toggleFar },
@@ -1004,9 +1192,14 @@ const hud = new Hud(document.body, [
   { label: "mesh", title: "Near-field meshes (M)", on: () => view.meshes, press: toggleMeshes },
   { label: "sdf", title: "SDF preview (P)", on: () => view.preview, press: togglePreview },
   { label: "grid", title: "Chunk grid (G)", on: () => view.grid, press: toggleGrid },
-  { label: "follow", title: "Fly along whatever is under the camera, a stream for instance (K)", on: () => following, press: toggleFollow },
+  {
+    label: "follow",
+    title: "Follow the bird a click picked out, or if none, fly along whatever is under the camera (K)",
+    on: () => following || chasing,
+    press: toggleFollow,
+  },
   { label: "stats", title: "Debug overlay (F2)", on: () => overlay.visible, press: () => overlay.toggle() },
-] satisfies HudButton[]);
+] satisfies HudButton[], describeCounts);
 
 addEventListener("keydown", (e) => {
   if (e.ctrlKey || e.metaKey || e.altKey || e.repeat) return;

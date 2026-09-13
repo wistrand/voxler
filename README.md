@@ -25,8 +25,8 @@ same world is one key away, though for a heavy world it takes a while to compile
 first time.
 
 Four worlds ship: a showcase of the SDF primitives, a terrain world, a fantasy forest at
-night with glowing fungus, lakes, waterfalls and mountains, and a desert of Monument
-Valley buttes. Pressing K starts a flyover that follows whatever is under the camera,
+night with glowing fungus, lakes, waterfalls, mountains and flocks of birds over it, and a
+desert of Monument Valley buttes. Pressing K starts a flyover that follows whatever is under the camera,
 which over a river follows the river.
 
 ## Requirements
@@ -66,4 +66,6 @@ Design notes and plans live in [agent_docs/](agent_docs/).
 
 ## License
 
-Not yet chosen.
+Apache License 2.0; see [LICENSE](LICENSE).
+
+Copyright 2026 Erik Wistrand.

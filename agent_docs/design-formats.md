@@ -322,12 +322,16 @@ offset  field          type       notes
 192     chunk          vec4<i32>  camera chunk coordinate; w unused
 208     offset         vec4f      eye in render space, each in [0, 32); w unused
 224     viewport       vec4f      width, height, 1 / width, 1 / height (pixels)
-240     time           vec4f      x: seconds, wrapped into WIND_PERIOD; yzw unused
+240     time           vec4f      x: clock, wrapped into WIND_PERIOD; y: this frame's dt; zw unused
 ```
 
 256 bytes. The clock wraps rather than running away, so f32 keeps its resolution; every
-animation term's period divides `WIND_PERIOD` (`src/render/camera-uniform.ts`), which is
-what makes the wrap invisible.
+term it drives has a period that divides `WIND_PERIOD` (`src/render/camera-uniform.ts`),
+which is what makes the wrap invisible. `dt` is there for the other kind of motion: a
+thing whose position is a function of the clock needs `x`, and a thing that integrates
+state forward needs `y`. It is clamped to `MAX_ANIMATION_DT`, because a tab that has been
+in the background comes back with a gap of minutes in it and an integrator would take one
+enormous step.
 
 Matrices are computed in float64 (`src/util/mat4.ts`) and rounded to f32 only here.
 They contain no large translations: render space puts the eye within one chunk of

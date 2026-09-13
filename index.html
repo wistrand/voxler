@@ -40,6 +40,13 @@
   }
   #hud button:hover { border-color: rgba(216, 228, 238, 0.55); color: #d8e4ee; }
   #hud button.on { background: rgba(120, 190, 150, 0.28); color: #eafff2; }
+  #hud .counts {
+    flex-basis: 100%; text-align: right; padding: 3px 6px; border-radius: 4px;
+    background: rgba(0, 0, 0, 0.55); color: #9fb3c4; font-variant-numeric: tabular-nums;
+    /* The picked bird is a second line in the same element, so the newline has to count. */
+    white-space: pre-line;
+  }
+  #hud .counts[hidden] { display: none; }
   #hud .note {
     flex-basis: 100%; text-align: right; padding: 3px 6px; border-radius: 4px;
     background: rgba(0, 0, 0, 0.55); color: #cbd8e4;

@@ -66,6 +66,57 @@ fn sh_solid(brick: u32, cell: vec3i) -> bool {
   return (shadow_bricks[brick * SH_BRICK_WORDS + (i >> 5u)] & (1u << (i & 31u))) != 0u;
 }
 
+// The same indirection read at any level, for the point test below. `sh_entry` is the
+// fixed-level version the ray uses and is left alone: a shadow ray only ever wants the
+// finest level, and paying for an index it already knows would be a waste on every step
+// of every ray.
+fn sh_entry_level(level: u32, b: vec3i) -> u32 {
+  let size = i32(shadow_far.grid.x);
+  if (any(b < vec3i(0)) || any(b >= vec3i(size))) {
+    return 0u;
+  }
+  let c = (b + shadow_far.level[level].wrap.xyz) & vec3i(size - 1);
+  return shadow_indirection[u32(shadow_far.level[level].offset.w) +
+    u32(c.x + c.y * size + c.z * size * size)];
+}
+
+// Whether anything solid stands at `render` (render space, world minus the camera chunk),
+// asked of the finest clipmap level whose window still reaches that far. False where no
+// level reaches, which is not the same as "there is nothing there": a caller that needs
+// to know the difference should check `sh_ground_reaches()`.
+//
+// A point test rather than a ray. What the bird flock wants is "is there ground just
+// under me", and a march for that is more than the question is worth.
+fn sh_solid_at(render: vec3f) -> bool {
+  for (var level = 0u; level < shadow_far.counts.x; level++) {
+    let cell_voxels = shadow_far.level[level].info.x;
+    if (cell_voxels <= 0.0) {
+      continue;
+    }
+    let p = (render + vec3f(shadow_far.level[level].offset.xyz)) / cell_voxels;
+    if (any(p < vec3f(0.0)) || any(p >= vec3f(shadow_far.level[level].info.y))) {
+      continue; // outside this level's window; the next one out is wider
+    }
+    let cell = vec3i(floor(p));
+    let brick = cell >> vec3u(3u); // SH_BRICK_CELLS is 8
+    let entry = sh_entry_level(level, brick);
+    if ((entry & SH_ENTRY_SOLID) != 0u) {
+      return true;
+    }
+    if (entry == 0u) {
+      return false;
+    }
+    return sh_solid(entry - 1u, cell - brick * SH_BRICK_CELLS);
+  }
+  return false;
+}
+
+// True when a clipmap is bound at all. `?far=0` builds none, and then nothing can be
+// asked about the ground.
+fn sh_ground_reaches() -> bool {
+  return shadow_far.counts.x > 0u && shadow_far.level[0].info.x > 0.0;
+}
+
 // Walks one occupied brick's cells from `t0`, in cell units. True on the first solid
 // cell: a shadow ray stops at anything.
 fn sh_march_brick(brick: u32, base: vec3i, p0: vec3f, dir: vec3f, inv: vec3f, t0: f32, t_end: f32) -> bool {

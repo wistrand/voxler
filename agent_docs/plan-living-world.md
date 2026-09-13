@@ -214,6 +214,48 @@ the sample point was the other candidate; it was built, measured at three times 
 far-field build cost, and taken out (same gotchas file, "A plant draped over the terrain
 is cheap").
 
+**Birds, which are drawn rather than grown.** Everything else in the wood is in the world
+SDF, and a bird cannot be: it travels, and a chunk is voxelized once. What is there
+instead is a small flock with state of its own, stepped in compute and drawn as three
+boxes a bird from its own frame, with the wings rotated in the vertex stage. Two kinds,
+because one kind reads as scenery and two read as a wood with something happening in it:
+six flocks of white birds running simple boids (separation, alignment, cohesion, a band to
+stay in, and a hunter to get away from), and four dark hunters that are bigger, slower in
+the wing, and lean on whichever flock is nearest. Countershaded pale underneath and dark on
+the back, because the forest's own sky is night and a bird dark on every face is invisible
+in it. Both passes together measure under the GPU timer's resolution
+([gotchas.md](gotchas.md) "A flock is state").
+
+**The wing beat is the work the bird is doing.** Lift costs energy and a descent gives it
+back, so `bird_effort()` is the climb angle and nothing else, and it drives both halves of
+the beat: the rate, which the step has to integrate because it is state, and the amplitude
+and dihedral, which the draw works out per frame. Climbing, a bird beats through the whole
+arc; gliding down it holds its wings out in a shallow V and rides. Measured off the state
+buffer, white birds at 8 ms apart: 3.6 rad/s of phase while descending, 13.8 level, 24.9
+climbing, and the hunters 1.3 against 10.6. One function read by both shaders, because a
+bird whose wings beat fast through a tiny arc reads as broken with nothing in the code
+looking wrong (`src/render/birds_test.ts`).
+
+Getting there needed the birds to climb and descend at all: a flock holding one altitude
+has no effort to key anything to. Each bird now heads for its own height in the band with
+a few voxels of rise and fall over it, on a whole number of turns of the wind clock so it
+closes at the wrap. The first cut swung the target across the whole band in two seconds,
+which is faster than a bird flies: they ended up climbing at sixty degrees to keep up with
+it, and the effort term saturated at both ends. **A target that moves faster than the thing
+chasing it is not a target, it is a wall.**
+
+**A bird never flies into a hill.** The band is a pair of absolute heights and the
+mountains stand through it, so the step asks the far field's clipmap what is under each
+bird: the same occupancy the shadow rays march, already bound, so it cost a point test
+beside the ray and no new data ([gotchas.md](gotchas.md) "The flock is the first thing
+that had to know where the ground is"). Clicking a bird picks it out, which is how most of
+this was checked: a ray against a sphere a bird wide, over a copy of the flock read back
+on the click (`src/render/birds.ts`). With one picked the follow switch chases it rather
+than the ground, over a rolling readback of that one bird on the same kind of ring the
+frame counters use, which is what keeps a `mapAsync` out of the frame path. The camera
+trails fifty voxels back, because a bird's flock-mates sit within twenty of it and a
+closer camera flies into the middle of them.
+
 **Four species and three greens.** Birch joined the broadleaf, conifer and ancient: a
 slender white trunk with the dark dashes, a bare length of it under a light airy crown,
 and it likes the low open ground where the conifers do not. The canopy has three leaf

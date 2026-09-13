@@ -18,6 +18,10 @@ export interface WorldEntry {
   // doubling `size` buys a finer cell at a given distance rather than more memory. The
   // `?far*` switches still win over anything set here.
   readonly far?: { readonly size?: number; readonly levels?: number; readonly bricks?: number };
+  // Birds over the world (`src/render/birds.wgsl`). Drawn, not voxelized, because they
+  // travel and a chunk is voxelized once; a world that asks for them pays one more
+  // pipeline and one more pass, so it is opt-in.
+  readonly birds?: boolean;
 }
 
 export interface WorldProgram {
@@ -27,6 +31,7 @@ export interface WorldProgram {
   readonly spawn: readonly [number, number, number];
   readonly sky: Sky;
   readonly far?: WorldEntry["far"];
+  readonly birds?: boolean;
 }
 
 export const WORLDS: Readonly<Record<string, WorldEntry>> = {
@@ -37,7 +42,7 @@ export const WORLDS: Readonly<Record<string, WorldEntry>> = {
   // camera inside the hill and every bench number it produces is for an empty frame
   // (gotchas.md "The grove bench walked 44 voxels underground").
   // A night wood: the moon is the only sky light, so the glowing plants carry the scene.
-  forest: { code: forest, spawn: [8, 188, 8], sky: "night" },
+  forest: { code: forest, spawn: [8, 188, 8], sky: "night", birds: true },
   // The floor is near y = 40 and the buttes stand a few hundred voxels over it; the
   // spawn is out on the open desert looking at them rather than under one.
   // The monuments stand a kilometre apart over an empty floor, so nearly every brick

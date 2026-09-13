@@ -25,16 +25,23 @@ const REFRESH_MS = 250;
 export class Hud {
   private readonly root: HTMLElement;
   private readonly fps: HTMLElement;
+  private readonly counts: HTMLElement;
   private readonly note: HTMLElement;
   private readonly buttons: readonly HudButton[];
+  // What the world currently holds, pulled rather than pushed: it is built on the panel's
+  // own slow tick, so the numbers behind it are read a few times a second and never in
+  // the frame path.
+  private readonly countsOf: (() => string) | null;
   private readonly nodes: HTMLButtonElement[] = [];
   private frames = 0;
   private last = 0;
   private next = 0;
   private shown = "";
+  private counted = "";
 
-  constructor(parent: HTMLElement, buttons: readonly HudButton[]) {
+  constructor(parent: HTMLElement, buttons: readonly HudButton[], counts: (() => string) | null = null) {
     this.buttons = buttons;
+    this.countsOf = counts;
     this.root = document.createElement("div");
     this.root.id = "hud";
     this.fps = document.createElement("span");
@@ -56,6 +63,10 @@ export class Hud {
       this.root.append(el);
       this.nodes.push(el);
     }
+    this.counts = document.createElement("span");
+    this.counts.className = "counts";
+    this.counts.hidden = counts === null;
+    this.root.append(this.counts);
     this.note = document.createElement("span");
     this.note.className = "note";
     this.note.hidden = true;
@@ -89,6 +100,13 @@ export class Hud {
     this.frames = 0;
     this.last = now;
     this.next = now + REFRESH_MS;
+    if (this.countsOf !== null) {
+      const text = this.countsOf();
+      if (text !== this.counted) {
+        this.counted = text;
+        this.counts.textContent = text;
+      }
+    }
     this.paint();
   }
 
