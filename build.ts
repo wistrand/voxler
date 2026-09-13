@@ -72,19 +72,32 @@ async function options(dev: boolean): Promise<esbuild.BuildOptions> {
   };
 }
 
-// Release build into a clean dist/. Returns false on any error or warning.
-export async function buildRelease(): Promise<boolean> {
+// One build into a clean dist/. Returns false on any error or warning.
+async function buildOnce(dev: boolean): Promise<boolean> {
   try {
     await Deno.remove(`${ROOT}/${OUT_DIR}`, { recursive: true });
   } catch (err) {
     if (!(err instanceof Deno.errors.NotFound)) throw err;
   }
   try {
-    const result = await esbuild.build(await options(false));
+    const result = await esbuild.build(await options(dev));
     return result.warnings.length === 0;
   } catch {
     return false; // esbuild has already printed the errors
   }
+}
+
+export function buildRelease(): Promise<boolean> {
+  return buildOnce(false);
+}
+
+// A one-shot dev build (`deno task build --dev`), for putting dist/ back after a release
+// build or `deno task pack` has overwritten it under a running `deno task dev`. The
+// watcher will not do it: esbuild compares a rebuild against its own cached output, not
+// against what is on disk, so it sees no change to write and dist/ stays minified with the
+// bench save compiled out, which leaves the dev server's save route with nothing to answer.
+export function buildDev(): Promise<boolean> {
+  return buildOnce(true);
 }
 
 // Dev build that rebuilds on change. Runs until the process exits.
@@ -94,7 +107,7 @@ export async function watch(): Promise<void> {
 }
 
 if (import.meta.main) {
-  const ok = await buildRelease();
+  const ok = Deno.args.includes("--dev") ? await buildDev() : await buildRelease();
   await esbuild.stop();
   if (!ok) {
     console.error("build failed: see errors or warnings above");

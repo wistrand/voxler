@@ -11,8 +11,13 @@ first consumer of the packaging API (`Voxler.create`), which makes it the check 
 API works from outside this repository rather than only inside it
 ([plan-packaging.md](../agent_docs/plan-packaging.md)).
 
+`CNAME` is what makes all of that answer at `https://voxler.dev/`: GitHub Pages reads it
+at the site root to know which domain this deploy owns. The workflow copies it there with
+the rest of `docs/`, and `src/release_test.ts` holds it against the host in `SITE`
+(`src/version.ts`), which is where the install URL comes from.
+
 The npm tarball is published here too. `deno task pack` builds it and the workflow copies
-`dist-npm/*.tgz` to the site root, so `npm install https://wistrand.github.io/voxler/voxler-<version>.tgz`
+`dist-npm/*.tgz` to the site root, so `npm install https://voxler.dev/voxler-<version>.tgz`
 works without a registry. The version in `start.html` is checked against the one the build
 produces by `src/release_test.ts`.
 

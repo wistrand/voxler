@@ -12,3 +12,15 @@ export const VERSION = "0.1.0";
 export function tarballName(version: string = VERSION): string {
   return `voxler-${version}.tgz`;
 }
+
+// Where the site lives. The custom domain is declared to GitHub by `docs/CNAME`, which the
+// workflow copies to the site root; `src/release_test.ts` holds the two against each other,
+// because a host that disagrees with the file that claims it is a 404 for everyone who
+// followed the install line.
+//
+// No trailing slash: everything below appends a path.
+export const SITE = "https://voxler.dev";
+
+export function tarballUrl(version: string = VERSION): string {
+  return `${SITE}/${tarballName(version)}`;
+}

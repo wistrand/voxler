@@ -70,6 +70,10 @@ jobs:
           test -d _site/play/workers
           # And the install URL has to exist, or the get-started page sends people at a 404.
           ls _site/voxler-*.tgz
+          # CNAME is what claims voxler.dev for this site. Without it at the root, Pages
+          # serves the deploy at github.io and every URL in the docs and the package
+          # README is a 404 (`src/release_test.ts` holds the file and the URLs together).
+          test -f _site/CNAME
           ls -la _site _site/play
 
       - uses: actions/configure-pages@v5

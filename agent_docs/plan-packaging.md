@@ -246,7 +246,7 @@ from 8 to 0 and stopped edited chunks being regenerated. The soak now lives in
 No registry. `npm install <https url>` takes a tarball directly, so the site is the
 distribution: CI builds the tarball and drops it at the site root, and the install line is
 
-    npm install https://wistrand.github.io/voxler/voxler-<version>.tgz
+    npm install https://voxler.dev/voxler-<version>.tgz
 
 - [x] `pack.ts` and `deno task pack`: builds the release, stages `voxler.js`,
       `workers/voxel.worker.js`, a generated `package.json`, a package README and the

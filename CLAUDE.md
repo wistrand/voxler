@@ -166,6 +166,8 @@ WGSL lives next to the TS that owns the pipeline (`src/render/cull.wgsl`, ...).
 ```bash
 deno task dev      # watch build + serve from 127.0.0.1:8000, or the next free port; PORT=<n> pins it
 deno task build    # clean release bundle into dist/; fails on any esbuild warning
+deno task build --dev  # one-shot dev bundle; puts dist/ back after build or pack
+                       # overwrote it under a running dev server (the watcher will not)
 deno task serve    # serve an existing dist/ without rebuilding
 deno task docs     # build, then serve the GitHub Pages site with no COOP/COEP, as Pages
                    # serves it (127.0.0.1:8001; BASE=voxler to mirror the project subpath)
@@ -180,13 +182,15 @@ deno task bench    # kernel benchmarks (meshing, palette compression, reduction)
 cannot set headers, so the published site is not cross-origin isolated and
 `SharedArrayBuffer` is unavailable there. Previewing with `serve` would hide that. The
 engine has a path for it (the arena falls back to a plain `ArrayBuffer` and mesh jobs copy)
-and `docs` is how to check it still does. It serves at `/`; `BASE=voxler` puts it under the
-subpath a project site actually lives at (`https://<user>.github.io/<repo>/`), which is
-worth a look after touching a path in `docs/index.html`, because an absolute one works at
-the root and 404s once deployed.
+and `docs` is how to check it still does. It serves at `/`, which is where the deployed
+site is: `docs/CNAME` claims voxler.dev. `BASE=voxler` puts it under the subpath a project
+site lives at without a domain (`https://<user>.github.io/<repo>/`), which is worth a look
+after touching a path in `docs/index.html`, because an absolute one works at the root and
+404s under a subpath.
 
 Every push to `main` publishes the site, live at
-[wistrand.github.io/voxler](https://wistrand.github.io/voxler/). The workflow type-checks
+[voxler.dev](https://voxler.dev/), whose custom domain is declared by `docs/CNAME` and
+copied to the site root by the workflow. It type-checks
 and runs the suite before it builds, so a red test stops the deploy rather than publishing
 over it; no bundle is committed, `dist/` is built in CI and copied to `play/`. `deno task
 build` writes the same bundle a release build writes, which is not the one the dev server

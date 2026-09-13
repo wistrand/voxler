@@ -5,7 +5,7 @@
 // the workflow builds this, drops it next to the site, and a consumer installs it from
 // there.
 //
-//   npm install https://wistrand.github.io/voxler/voxler-<version>.tgz
+//   npm install https://voxler.dev/voxler-<version>.tgz
 //
 // What goes in is the bundle and nothing else: `voxler.js` with the WGSL inlined,
 // `workers/voxel.worker.js` beside it (the default worker factory resolves against
@@ -22,7 +22,7 @@
 // Run with `deno task pack`.
 
 import { buildRelease } from "./build.ts";
-import { tarballName, VERSION } from "./src/version.ts";
+import { SITE, tarballName, tarballUrl, VERSION } from "./src/version.ts";
 
 // The version lives in `src/version.ts`, not here: the repo is a Deno project and the npm
 // package is an artefact of it, so there is no package.json to read it from, and keeping
@@ -54,7 +54,7 @@ function packageJson(): string {
         "A WebGPU voxel engine. Worlds are WGSL functions evaluated on the GPU rather than stored voxel data.",
       license: "Apache-2.0",
       author: "Erik Wistrand",
-      homepage: "https://wistrand.github.io/voxler/",
+      homepage: `${SITE}/`,
       repository: { type: "git", url: "git+https://github.com/wistrand/voxler.git" },
       keywords: ["webgpu", "voxel", "renderer", "wgsl", "sdf", "engine"],
       type: "module",
@@ -87,8 +87,8 @@ function readme(): string {
 A WebGPU voxel engine for the browser. A world is generated on the GPU from a WGSL
 function rather than stored as voxel data, so there is no level to load.
 
-- Demo and documentation: https://wistrand.github.io/voxler/
-- Get started, with worlds you can read and run: https://wistrand.github.io/voxler/start.html
+- Demo and documentation: ${SITE}/
+- Get started, with worlds you can read and run: ${SITE}/start.html
 - Source: https://github.com/wistrand/voxler
 
 ## Install
@@ -96,7 +96,7 @@ function rather than stored as voxel data, so there is no level to load.
 Not on the npm registry. Install the tarball over HTTPS:
 
 \`\`\`
-npm install https://wistrand.github.io/voxler/${TARBALL}
+npm install ${tarballUrl()}
 \`\`\`
 
 Pin the version in the URL. npm caches a tarball by its URL, so a moving filename is a
@@ -204,7 +204,7 @@ export async function pack(): Promise<boolean> {
 
   const size = (await Deno.stat(`${OUT}/${TARBALL}`)).size;
   console.log(`\ndist-npm/${TARBALL}  ${(size / 1024).toFixed(0)} KiB`);
-  console.log(`  npm install https://wistrand.github.io/voxler/${TARBALL}`);
+  console.log(`  npm install ${tarballUrl()}`);
   return true;
 }
 

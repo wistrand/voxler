@@ -9,12 +9,12 @@
 // docs/ and dist/ are routed off disk rather than copied the way the workflow copies them,
 // so an edit to docs/index.html shows on reload.
 //
-// It serves at / by default. A project site actually lives at
-// https://<user>.github.io/<repo>/, and serving under that subpath would catch a path
-// that is absolute when it should be relative, which is silent locally and broken once
-// deployed. Nothing in the site is absolute today, so that is a guard against a mistake
-// nobody has made yet, and it is not worth an odd URL every day: `BASE=voxler` turns it on
-// when you want to check, and a custom domain would put the real site at / anyway.
+// It serves at /, which is where the real site is: `docs/CNAME` claims voxler.dev, so the
+// deploy answers at the apex rather than under https://<user>.github.io/<repo>/.
+// `BASE=voxler` serves it under that subpath instead, which is what the site falls back to
+// if the domain is ever dropped, and it catches a path that is absolute when it should be
+// relative: silent at the root, broken under a subpath. Nothing in the site is absolute
+// today, so it is a check worth running after touching a path, not a way to serve daily.
 //
 // Env: HOST (default 127.0.0.1), PORT (default 8001, then the next free one), BASE (serve
 // under a subpath instead of /).

@@ -3,8 +3,7 @@
 A voxel engine for the browser, built on WebGPU. A world is generated on the GPU from a
 WGSL function rather than stored as voxel data, so there is no level to load.
 
-It runs at [wistrand.github.io/voxler](https://wistrand.github.io/voxler/) if your
-browser has WebGPU.
+It runs at [voxler.dev](https://voxler.dev/) if your browser has WebGPU.
 
 ## What "very large" means here
 
