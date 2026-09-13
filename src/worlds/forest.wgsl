@@ -16,9 +16,12 @@
 // would cut through it).
 
 // The steepest thing here is a terrace edge: TERRACE_DROP over BANK voxels, about 2.8.
-// The mountains and hills add their own octaves on top; 5 covers the sum with room,
-// and the preview is where an underestimate would show as holes.
-const WORLD_LIPSCHITZ: f32 = 5.0;
+// The mountains and hills add their own octaves on top, and the range term adds the most
+// of any of them because it rides on the square of the ridged noise, which doubles that
+// noise's own slope at the crests. 6 covers the sum with room; the preview (P) is where
+// an underestimate would show as holes, and it is the check to run after touching any of
+// the amplitudes below.
+const WORLD_LIPSCHITZ: f32 = 6.0;
 
 // Voxels per unit of the forest's design scale. Everything below is written at a
 // human scale and multiplied by this, so the whole wood can be made finer or coarser
@@ -31,8 +34,19 @@ const TERRACE_DROP = 7.0 * S; // height of one step
 const BANK = 2.5 * S; // horizontal run of a step, so its slope is TERRACE_DROP / BANK
 const LAKE_LEVEL = 8.0 * S; // standing water fills anything below this: valley lakes
 const HILL_AMP = 22.0 * S;
-const MOUNTAIN_AMP = 60.0 * S; // peaks stand about 165 voxels over the valley floor
-const TREE_LINE = 46.0 * S; // no forest above this
+const MOUNTAIN_AMP = 60.0 * S; // the ridges themselves, about 165 voxels
+// What turns ridges into mountains. It rides on a high power of the same ridged noise and
+// on the square of the same mask, rather than on a second field: it costs no extra noise
+// on the hottest function in the world, and a power that steep leaves the low ground
+// exactly where it was and lifts only the crests. The square was the first try and it is
+// too gentle a curve: it raised the median ground from 100 to 209, which is over the tree
+// line, so the wood became bare rock everywhere instead of a few mountains standing out
+// of it. Check the median, not just the peak, after touching this.
+const RANGE_AMP = 150.0 * S; // the summits, 400 voxels over the ridges again
+// The wood stops here and the rock starts, and the snow well above that. Both moved up
+// with the mountains: leave the tree line where it was and the higher ground turns the
+// whole wood into bare rock, because what the ranges lift is not only their own summits.
+const TREE_LINE = 62.0 * S;
 // Tries per tree cell. One to a cell is a stratified sample however far it is jittered:
 // no two trees ever close, no gap ever much wider than a cell, and that is the grid.
 const TREE_TRIES: u32 = 3u;
@@ -44,7 +58,10 @@ const TREE_DRY = 1.5 * S;
 const TREE_SHORE_BAND = 5.0 * S;
 const UNDER_DRY = 0.5 * S;
 const UNDER_SHORE_BAND = 2.5 * S;
-const SNOW_LINE = 62.0 * S;
+// Snow well above the tree line, not just above it: the band between is bare rock, and
+// with summits hundreds of voxels over the ridges there is room for it to read as a
+// mountainside rather than as a stripe.
+const SNOW_LINE = 95.0 * S;
 const CHANNEL_HALF = 6.0 * S; // half width of the stream's cut
 const CHANNEL_DEPTH = 3.5 * S;
 const SOIL = 4.0 * S; // dirt above stone
@@ -157,7 +174,9 @@ fn land_height2(p: WorldPoint, c: f32) -> vec3f {
   let hills = fbm2(p, 10u, 5u, 0.5) * HILL_AMP + 6.0 * S;
   let alp = fbm2(p, 12u, 2u, 0.5) * 0.5 + 0.5; // 0 lowland, 1 the core of a mountain
   let mask = smoothstep(0.15, 0.65, alp);
-  let rolling = hills + ridged2(p, 12u, 4u, 0.5) * MOUNTAIN_AMP * mask;
+  let ridge = ridged2(p, 12u, 4u, 0.5);
+  let crest = ridge * ridge * ridge;
+  let rolling = hills + (ridge * MOUNTAIN_AMP + crest * RANGE_AMP * mask) * mask;
   // Quantize to steps, with the transition spread over BANK voxels of height so the
   // slope stays finite. `smoothstep` over the fraction does that: flat tread, steep
   // riser, no discontinuity.
@@ -685,6 +704,9 @@ const SHROOM_CLUSTER = 3u;
 // Mushrooms: clumps of small glowing caps, and the occasional giant one. The colour is
 // the cell's, so a clump shares a species.
 fn mushrooms(p: WorldPoint, ground: f32) -> vec2f {
+  if (ground > TREE_LINE) {
+    return vec2f(1e9, 0.0); // undergrowth stops where the wood does
+  }
   let y = f32(p.cell.y) + p.frac.y;
   var best = vec2f(1e9, 0.0);
   for (var i = -1; i <= 1; i++) {
@@ -749,6 +771,9 @@ fn mushrooms(p: WorldPoint, ground: f32) -> vec2f {
 // The giants: a few to a coarse cell, tall enough to stand clear of the undergrowth and
 // far enough apart that two caps never meet.
 fn giants(p: WorldPoint, ground: f32) -> vec2f {
+  if (ground > TREE_LINE) {
+    return vec2f(1e9, 0.0); // undergrowth stops where the wood does
+  }
   let y = f32(p.cell.y) + p.frac.y;
   var best = vec2f(1e9, 0.0);
   for (var i = -1; i <= 1; i++) {
@@ -828,6 +853,9 @@ fn giants(p: WorldPoint, ground: f32) -> vec2f {
 
 // Ferns: a few fronds arcing out of one point.
 fn ferns(p: WorldPoint, ground: f32) -> vec2f {
+  if (ground > TREE_LINE) {
+    return vec2f(1e9, 0.0); // undergrowth stops where the wood does
+  }
   let y = f32(p.cell.y) + p.frac.y;
   var best = vec2f(1e9, 0.0);
   for (var i = -1; i <= 1; i++) {

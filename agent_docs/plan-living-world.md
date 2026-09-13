@@ -187,6 +187,22 @@ It animates by scrolling its texture (`flow` in the block table), not by swaying
 a sheet of water pushes it into the blocks around it and flickers
 ([gotchas.md](gotchas.md) "Animate flowing water with the texture, not the geometry").
 
+**High mountains.** The ranges ride on a *power* of the ridged noise the hills already
+compute, not on a field of their own: `ridge^3 * RANGE_AMP * mask^2` costs no extra noise
+in the world's hottest function, and a power that steep leaves the low ground where it was
+and lifts only the crests. The exponent is the whole design and it took measuring to find.
+Squared was the first try: it raised the *median* ground near the spawn from about 100 to
+209, over the tree line, so the wood became bare rock everywhere instead of a few mountains
+standing out of it. Cubed, with the mask squared, gives a median of 169 and a peak of 276
+within 450 voxels of the spawn, against 191 before any of this; the formula's ceiling where
+the ridge and the mask both max out is 654.
+
+The tree line and the snow line moved up with the ranges (62 * S and 95 * S), because
+leaving them where they were is what turns a higher wood into bare rock. `WORLD_LIPSCHITZ`
+went 5 to 6: the range term rides on a cube, which triples that noise's own slope at a
+crest. **Check the median as well as the peak, and check the preview for holes, after
+touching any of the amplitudes.**
+
 **Four species and three greens.** Birch joined the broadleaf, conifer and ancient: a
 slender white trunk with the dark dashes, a bare length of it under a light airy crown,
 and it likes the low open ground where the conifers do not. The canopy has three leaf

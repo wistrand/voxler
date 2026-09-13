@@ -31,7 +31,7 @@ struct SlabParams {
 }
 
 struct FarColors {
-  color: array<vec4f, 512>, // MAX_BLOCK_TYPES x 2; solidity is in the first one's alpha
+  color: array<vec4f, 768>, // MAX_BLOCK_TYPES x 3; solidity is in the first one's alpha
 }
 
 @group(0) @binding(0) var<uniform> build: SlabParams;
@@ -170,7 +170,7 @@ fn build_slab(@builtin(workgroup_id) wg: vec3u, @builtin(local_invocation_index)
       id = world_material(p) & 0xFFFFu;
     }
     id = min(id, 255u);
-    if (far_colors.color[id * 2u].a < 1.0) {
+    if (far_colors.color[id * 3u].a < 1.0) {
       continue; // not solid: translucent cells are phase 4's
     }
     atomicOr(&wg_occupancy[c >> 5u], 1u << (c & 31u));

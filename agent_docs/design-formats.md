@@ -71,7 +71,16 @@ at `id * 3`, its emission at `id * 3 + 1` and its flow at `id * 3 + 2`.
 
 Emission has no tonemapping behind it: a lit surface plus emission past 1 clips to
 white and the block loses its colour, so emission stays small enough that the two
-together fit (a unit test checks it). The far-field colour table (`farColorTable()`) has
+together fit (a unit test checks it).
+
+Four shaders index this table and each writes the stride out by hand: `near.wgsl`,
+`far.wgsl`, `far-build.wgsl` and `preview.wgsl`. Change the stride and all four change,
+in the same commit. `src/world/block-table_test.ts` checks them against
+`BLOCK_TABLE_STRIDE` and is the reason a missed one is a failing test rather than a world
+with its terrain missing ([gotchas.md](gotchas.md) "A table with one owner and four
+hand-written readers").
+
+The far-field colour table (`farColorTable()`) has
 the same stride and the same meaning with two differences: solidity in place of coverage,
 and float 7 is the block's **light level** (0 to `LIGHT_MAX`) rather than its sway. The
 far field has no mesh and so no baked light to read, so it works the light out at the hit

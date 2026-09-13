@@ -1,6 +1,6 @@
 # Research: voxel engine comparison
 
-> Snapshot: 2026-09-12. External projects change; re-check their documentation
+> Snapshot: 2026-09-13. External projects change; re-check their documentation
 > before relying on implementation or support details.
 
 ## Conclusion
@@ -8,8 +8,9 @@
 Voxler compares well as a specialized rendering architecture, but it is not yet a
 complete game engine. Its distinguishing feature is the combination of a GPU-authored
 procedural world, detailed block meshes nearby, and ray-marched clipmaps at distance
-in a browser. A runtime controller adjusts the far field's build rate, reach, and march
-resolution from measured frame headroom instead of assuming one fixed GPU budget.
+in a browser. Worlds can choose different clipmap shapes, their default reach is trimmed
+to the distance their fog leaves visible, and an experimental runtime controller can
+adjust build rate, reach, and march resolution when explicitly enabled.
 
 Direct performance rankings are not justified. Voxler has measurements from one Intel
 Arc B390 system, while the projects below publish different workloads or no comparable
@@ -17,12 +18,12 @@ benchmark.
 
 | System | Main representation | Distant terrain | Main advantage over Voxler | Voxler's advantage |
 | ------ | ------------------- | --------------- | -------------------------- | ------------------ |
-| Minecraft and Sodium-style renderers | Stored chunk blocks converted to meshes | More chunks, fog, or a separate LOD system | Mature content, block models, simulation, ecosystem | GPU SDF generation, GPU Hi-Z culling, adaptive integrated far field |
+| Minecraft and Sodium-style renderers | Stored chunk blocks converted to meshes | More chunks, fog, or a separate LOD system | Mature content, block models, simulation, ecosystem | GPU SDF generation, GPU Hi-Z culling, world-specific integrated far field |
 | Godot Voxel Tools | Streamed voxel blocks and chunk meshes | Transvoxel LOD for smooth terrain | Physics, instancing, editor integration, smooth terrain | Greedy block meshing and working blocky far-field LOD |
-| Voxelize | Server-authoritative stored voxel world | Conventional streamed chunks | Multiplayer, entities, physics, persistence | More specialized GPU rendering and greater procedural view distance |
+| Voxelize | Server-authoritative stored voxel world | Conventional streamed chunks | Multiplayer, entities, physics, persistence | More specialized GPU rendering and an SDF-derived far field |
 | Divine Voxel Engine | Minecraft-like voxel data and models | Conventional streaming | Models, state systems, fluids, power, PBR | Purpose-built WebGPU pipeline, clipmaps, SDF worlds |
 | Voxel Plugin 2 | Procedural volume and height stamps | Nanite terrain | Unreal tools, materials, PCG, smooth terrain | Cubic block terrain and browser deployment |
-| GPU binary-greedy engines | Chunk voxels and compact quads | Chunk ring buffers | Native APIs and fewer browser constraints | SDF generation, Hi-Z occlusion, clipmaps, unified far-field shadows |
+| GPU binary-greedy engines | Chunk voxels and compact quads | Chunk ring buffers | Native APIs and fewer browser constraints | SDF generation, Hi-Z occlusion, clipmaps, clipmap-sourced near-field shadows |
 | SVO and GVDB renderers | Sparse hierarchical voxels | The same hierarchy at coarser levels | Arbitrary volume detail and fully ray-cast scenes | Better fit for textured block surfaces and core WebGPU |
 
 ## Conventional block engines
@@ -65,7 +66,7 @@ Voxler is narrower and more specialized for full cubes:
 - GPU cluster culling
 - Two-phase Hi-Z occlusion
 - Camera-relative large coordinates
-- Up to a 32,768-voxel procedural view distance, adapted at runtime
+- A world-specific procedural view distance, with 32,768 available by override
 
 Godot Voxel Tools is a better base for a conventional game because it brings the Godot
 editor, physics, scene, asset, and scripting systems. Voxler has the more specialized
@@ -93,7 +94,8 @@ Voxler is more specialized on the rendering side:
 - Two-phase Hi-Z occlusion
 - Ray-marched far-field clipmaps
 - Shadows marched through the far-field clipmap
-- Runtime adaptation of far-field build rate, reach, and resolution
+- Approximate block light at far-field hits
+- Optional runtime adaptation of far-field build rate, reach, and resolution
 
 Voxelize is much further along as a multiplayer game platform. Voxler does not yet
 provide equivalent server authority, networking, entities, physics, persistence, or
@@ -142,9 +144,9 @@ frustum culling, indirect rendering, and a three-dimensional chunk ring buffer.
 The native engine can use OpenGL 4.6 facilities such as persistent mapped buffers and
 multi-draw indirect. Voxler deliberately avoids multi-draw indirect and unsafe browser
 features, using core WebGPU instead. Voxler adds GPU SDF generation, two-phase Hi-Z,
-the far-field clipmap, clipmap shadow rays, and a measured-cost controller for far-field
-quality. The native engine currently supports smaller chunk formats and does not
-document an equivalent far-field representation.
+the far-field clipmap, near-field shadow rays through that clipmap, and a measured-cost
+controller for far-field quality that is available as an experiment. The native engine currently supports
+smaller chunk formats and does not document an equivalent far-field representation.
 
 Source: [C++ GPU-driven VoxelEngine](https://github.com/omar-owis/VoxelEngine)
 
@@ -172,12 +174,20 @@ Sources:
 - [Efficient Sparse Voxel Octrees](https://research.nvidia.com/publication/2010-02_efficient-sparse-voxel-octrees)
 - [NVIDIA GVDB Voxels](https://github.com/NVIDIA/gvdb-voxels)
 
-## Adaptive far-field quality
+## Far-field policy and optional adaptation
 
-The allocated clipmap still has eight levels and a maximum 32,768-voxel reach, but that
-is now a ceiling rather than the guaranteed operating distance. Outside benchmarks, a
-controller evaluates the display period and GPU pass timings about once per second. It
-changes three controls in this order when over budget:
+Far-field configuration is no longer one global preset. The terrain and forest start
+from a 32-brick-wide, eight-level ceiling, but startup trims levels beyond the world's
+fog horizon. They therefore allocate seven levels and reach 16,384 voxels by default.
+The monument world uses six 64-brick-wide levels and also reaches 16,384 voxels. Its
+wider levels retain finer cells at a given distance and suit a sparse, clear-air desert.
+`?farLevels=` can override the fog-derived count; eight narrow levels reach 32,768
+voxels.
+
+The default is fixed after startup. An experimental controller is available through
+`?farAdapt=1`, but is off because changing reach or resolution while the camera is still
+causes a visible pop. When enabled, it evaluates the display period and GPU pass timings
+about once per second. It changes three controls in this order when over budget:
 
 1. Reduce brick slabs sampled per frame, increasing catch-up time without changing the
    settled image.
@@ -185,36 +195,61 @@ changes three controls in this order when over budget:
 3. Reduce march resolution, which affects visible detail throughout the far field.
 
 When headroom returns, it restores slab throughput first, then resolution, then reach.
-The configured range is three to eight levels, corresponding to about 512 to 32,768
-voxels of reach with the default finest level, and march scales from half to full
-resolution. Hysteresis and a settling delay after level changes prevent the controller
-from oscillating on rebuild cost.
+The controller's configured range is three to eight levels, corresponding to about 512
+to 32,768 voxels of reach for a 32-brick-wide clipmap with the default finest level, and
+march scales from half to full resolution. Hysteresis and a settling delay after level
+changes prevent oscillation on rebuild cost.
 
-This improves Voxler's portability argument relative to engines with one fixed view
-distance preset. It is not evidence that every supported GPU reaches 32,768 voxels:
-weaker hardware can trade reach before it trades image sharpness. Bench runs disable
-adaptation so their settings remain comparable.
+Fog-derived and per-world configuration are part of the normal renderer. Adaptive
+quality is not yet part of the portability claim because users must opt into it. Bench
+runs disable adaptation so their settings remain comparable.
 
 Sources:
 
 - [Adaptive controller](../src/far/adapt.ts)
 - [Far-field plan](plan-far-field.md)
+- [Monument Valley plan](plan-monument-valley.md)
+
+## Far-field lighting limits
+
+The near field bakes ambient occlusion and block light per quad corner. The far field
+has no mesh, so it approximates block light at a hit by gathering the twenty-six
+neighbouring cells and applying distance falloff. This removes the obvious lighting seam
+around distant glowing blocks, but it is not the same solution: it reaches only one
+coarse cell, does not flood around occluders, and has no ambient occlusion.
+
+Near-field surfaces cast shadow rays through the clipmap, avoiding a shadow map and a
+second scene draw. Far-field and preview surfaces remain unshadowed. The current claim
+is therefore "the near field receives clipmap shadows", not "the whole world is
+shadowed".
+
+Sources:
+
+- [Far-field block light](plan-far-field.md)
+- [Living-world lighting and shadows](plan-living-world.md)
 
 ## Scale and performance evidence
 
-The current grove benchmark records:
+The latest recorded grove benchmark, from before the subsequent far-field lighting and
+default-resolution changes, records:
 
 - 11,492 resident chunks, representing 376,569,856 full-resolution voxel positions
 - 4,243,367 real near-field quads and 4,435,520 after cluster padding
 - 12,052 visible clusters in the recorded final state
 - Zero streaming holes
-- A maximum 32,768-voxel far-field reach; normal runtime operation may adapt lower
+- A pinned far-field configuration, because adaptation is disabled in benchmarks
 
-The forest generally reaches a 60 Hz-class p99 on the measured machine but does not
-hold 120 Hz continuously. Far-field slab sampling of the forest's expensive SDF is the
-main intermittent cost. The four terrain benchmark scenes hold the 120 Hz target on
-the same machine. These benchmark runs pin the far-field settings; the adaptive
-controller is intentionally disabled while measuring.
+That forest run reached a 60 Hz-class p99 on the measured machine but did not hold 120
+Hz continuously. Far-field slab sampling of the forest's expensive SDF was the main
+intermittent cost. It should not be presented as current forest performance until the
+grove is rerun with the later far-field changes.
+
+The newest terrain flyover records 11,583 resident chunks, 2,196,563 real quads, zero
+streaming holes, a 1.36 ms CPU-frame p50, a 2.10 ms near opaque p50, a 3.08 ms far-march
+p50, and a 0.59 ms far-build p50. It missed 46 of 1,151 frames and its interval p99 was
+16.67 ms, so the current full-resolution far field does not sustain 120 Hz throughout
+that run. This supersedes the earlier blanket statement that all terrain scenes hold
+120 Hz; the full suite has not yet been rerun in the new state.
 
 These figures establish that Voxler's architecture works at its intended scale on the
 development machine. They do not establish superiority over another engine because
@@ -224,6 +259,7 @@ Sources:
 
 - [Project performance table](../AGENTS.md#performance-targets)
 - [Latest recorded grove benchmark](../bench/results/grove.20260912T182939Z.chrome-152-on-linux.json)
+- [Latest recorded terrain flyover](../bench/results/flyover.20260912T201507Z.chrome-152-on-linux.json)
 
 ## What is worth borrowing
 
@@ -250,8 +286,9 @@ value in 8-bit. Everything the clipmap reaches past that point is work whose res
 not visible.
 
 The distance is `ln(200) / FOG_DENSITY`: 15,134 voxels for `day`, 10,594 for `night`,
-37,875 for `desert`. The default eight levels reach 32,768, so `terrain` and `forest` are
-marching one level and most of another that fog has already closed. Measured on terrain,
+37,875 for `desert`. The configured eight-level ceiling reaches 32,768, so `terrain` and
+`forest` would march one level and most of another that fog has already closed without
+the startup trim. Measured on terrain,
 looking at the horizon at 1080p: 2.36 ms p50 at eight levels, 2.16 at seven (a reach of
 16,384, still past the fog horizon), 1.90 at six (8,192, which does cut visibly: 94%
 extinction leaves 6% of the surface showing).
@@ -317,7 +354,8 @@ Voxler's position is:
 - **Rendering architecture:** unusually advanced for an independent browser voxel
   project.
 - **Large procedural block worlds:** differentiated by one source feeding near meshes,
-  far clipmaps, edits, and shadows, with measured-cost adaptation around the far field.
+  far clipmaps, edits, and near-field shadows, with per-world far-field configuration
+  and optional measured-cost adaptation.
 - **General engine capability:** behind Godot Voxel Tools, Voxelize, Divine Voxel
   Engine, and Unreal-based systems.
 - **Production validation:** limited to the recorded Chrome and Linux development

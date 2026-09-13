@@ -716,3 +716,25 @@ Diagnosed bugs, as symptom, diagnosis, fix, takeaway. None diagnosed yet.
 - **Takeaway:** when a feature should be rare, the rarity needs its own field at its own
   scale. Tightening a local test until the count comes down gets you a feature that is
   both rare and wrong, or one that never appears.
+
+### A table with one owner and four hand-written readers
+
+- **Symptom:** sky through large areas of the world, worst looking down from altitude,
+  where the ground should be. The far field had 1,767 bricks where it should have had
+  6,424, and a probe of the clipmap found level 2 empty and the levels under it empty even
+  deep underground, where solid stone should be a `ENTRY_SOLID` brick.
+- **Cause:** the block table grew from two `vec4f` per block to three (adding `flow`), and
+  four shaders index it by a multiplier written out by hand. Three were updated;
+  `far-build.wgsl` still read `far_colors.color[id * 2u].a`, which is the *solidity* test
+  the far-field builder uses to decide whether a cell counts. At the wrong stride it read
+  some other block's emission slot, found alpha under 1, and skipped the cell as "not
+  solid". Most of the terrain simply stopped existing in the clipmap.
+- **Why it was silent:** nothing connects the stride in TypeScript to the multipliers in
+  WGSL, and both sides compile perfectly at the wrong number. The near field was
+  unaffected (it was one of the three that were updated) so the world still looked right
+  from the ground, where the near field draws.
+- **Fix and guard:** `src/world/block-table_test.ts` reads the four shaders and checks
+  every index multiplier and every declared array length against `BLOCK_TABLE_STRIDE`. It
+  fails on the original bug; that was checked by reintroducing it.
+- **Takeaway:** when a binary format has one owner and hand-written readers, the readers
+  are the format. Widening one is not done until something *fails* if a reader is missed.
