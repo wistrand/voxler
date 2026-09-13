@@ -3,7 +3,8 @@
     "dev": "deno run --allow-read --allow-write=dist,bench/results --allow-env --allow-run --allow-net serve.ts --dev",
     "build": "deno run --allow-read --allow-write=dist --allow-env --allow-run build.ts",
     "serve": "deno run --allow-read=dist,.certs --allow-env=PORT,HOST,TLS_CERT,TLS_KEY --allow-net serve.ts",
-    "check": "deno check src/ build.ts serve.ts",
+    "docs": "deno task build && deno run --allow-read=docs,dist --allow-env=PORT,HOST,BASE --allow-net docs-serve.ts",
+    "check": "deno check src/ build.ts serve.ts docs-serve.ts",
     "test": "deno test --permit-no-files --allow-read=src src/",
     "bench": "deno bench --permit-no-files src/"
   },

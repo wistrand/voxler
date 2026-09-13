@@ -1,0 +1,173 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Voxler</title>
+<meta name="description" content="A voxel engine for the browser, on WebGPU. Very large worlds at high frame rates.">
+<meta property="og:title" content="Voxler">
+<meta property="og:description" content="A voxel engine for the browser, on WebGPU. Very large worlds at high frame rates.">
+<meta property="og:image" content="media/forest-night.jpg">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' fill='%23223'/%3E%3Cpath d='M8 2l5 3v6l-5 3-5-3V5z' fill='%236c8'/%3E%3Cpath d='M8 2l5 3-5 3-5-3z' fill='%239ea'/%3E%3Cpath d='M8 8v6l-5-3V5z' fill='%234a6'/%3E%3C/svg%3E">
+<style>
+  :root {
+    --bg: #0e1116;
+    --panel: #161b22;
+    --edge: #262d36;
+    --text: #d8e0e8;
+    --dim: #9aa7b4;
+    --accent: #7fd39b;
+  }
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 16px/1.65 system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  main { max-width: 62rem; margin: 0 auto; padding: 0 1.25rem 5rem; }
+  a { color: var(--accent); }
+  h1 { font-size: 2.6rem; margin: 0 0 .3rem; letter-spacing: -.02em; }
+  h2 { font-size: 1.3rem; margin: 3rem 0 .75rem; letter-spacing: -.01em; }
+  h3 { font-size: 1rem; margin: 0 0 .35rem; }
+  p { margin: 0 0 1rem; }
+  header { padding: 4rem 0 1.5rem; }
+  .lead { font-size: 1.15rem; color: var(--dim); margin-bottom: 1.5rem; max-width: 46rem; }
+  .actions { display: flex; flex-wrap: wrap; gap: .75rem; align-items: center; }
+  .button {
+    display: inline-block; padding: .7rem 1.3rem; border-radius: 6px;
+    background: var(--accent); color: #0b0f14; font-weight: 600; text-decoration: none;
+  }
+  .button:hover { filter: brightness(1.08); }
+  .button.secondary { background: transparent; color: var(--text); border: 1px solid var(--edge); }
+  figure { margin: 0 0 1.25rem; }
+  figure img {
+    display: block; width: 100%; height: auto; border-radius: 8px;
+    border: 1px solid var(--edge); background: var(--panel);
+  }
+  figcaption { color: var(--dim); font-size: .9rem; padding-top: .45rem; }
+  .grid { display: grid; gap: 1.25rem; grid-template-columns: repeat(auto-fit, minmax(20rem, 1fr)); }
+  .note {
+    background: var(--panel); border: 1px solid var(--edge); border-radius: 8px;
+    padding: 1rem 1.15rem; color: var(--dim);
+  }
+  .note strong { color: var(--text); }
+  ul { padding-left: 1.15rem; }
+  li { margin-bottom: .35rem; }
+  kbd {
+    font: inherit; font-size: .85em; padding: .1em .4em; border-radius: 4px;
+    background: var(--panel); border: 1px solid var(--edge);
+  }
+  footer { color: var(--dim); font-size: .9rem; border-top: 1px solid var(--edge); padding-top: 1.5rem; margin-top: 3.5rem; }
+</style>
+</head>
+<body>
+<main>
+
+<header>
+  <h1>Voxler</h1>
+  <p class="lead">
+    A voxel engine for the browser, on WebGPU. Very large worlds at high frame rates.
+  </p>
+  <div class="actions">
+    <a class="button" href="play/?world=forest">Open the forest</a>
+    <a class="button secondary" href="https://github.com/wistrand/voxler">Source</a>
+  </div>
+</header>
+
+<figure>
+  <img src="media/forest-night.jpg" alt="A voxel forest at night, lit by glowing mushroom caps, with birds over the canopy." width="1600" height="900">
+  <figcaption>The forest world. The moon is the only sky light, so the glowing caps carry the scene.</figcaption>
+</figure>
+
+<div class="note">
+  <p style="margin:0">
+    <strong>It needs WebGPU.</strong> Chrome or Edge on desktop, Safari 26 on macOS 26 or
+    iOS 26, or Firefox on Windows or Apple Silicon. There is no WebGL fallback, so an older
+    browser gets a message and nothing else. The forest takes a few seconds to compile its
+    shaders on the first load.
+  </p>
+</div>
+
+<h2>What it does</h2>
+
+<p>
+  A world is not a file. It is a WGSL program: a signed distance function plus a material
+  function, sampled on the GPU at whatever resolution each consumer needs. Nothing is
+  stored on disk and nothing is streamed over the network.
+</p>
+
+<p>
+  Close to the camera, 32-voxel chunks are voxelized on the GPU, read back, and meshed in
+  background workers with binary greedy meshing. The quads are 8 bytes each. A compute pass
+  culls them against the frustum and a depth pyramid, and the whole near field goes out in
+  one indirect draw.
+</p>
+
+<p>
+  Farther out, where a voxel face is smaller than a pixel, it stops drawing triangles and
+  ray-marches a brickmap clipmap in compute. View distance then costs a fixed amount of GPU
+  time per pixel instead of growing with the number of voxels. The same clipmap is what the
+  near field's shadow rays march, so shadows cost no shadow map and no second draw.
+</p>
+
+<figure>
+  <img src="media/clipmap-levels.jpg" alt="The desert from above with each clipmap level in a different colour, forming nested square windows around the camera." width="1600" height="900">
+  <figcaption>
+    The far field from above with its meshes turned off and each clipmap level given a
+    colour. The levels are nested windows centred on the camera, each twice as wide as the
+    one inside it and sampling the world at twice the cell size.
+  </figcaption>
+</figure>
+
+<h2>The worlds</h2>
+
+<div class="grid">
+  <figure>
+    <img src="media/forest-day.jpg" alt="A lake under a snow-capped mountain, with conifers, alpine ferns on the rock and a flock of white birds." width="1600" height="900">
+    <figcaption>
+      The forest again in daylight. Four tree species, mountains with a rock band and snow
+      on top, undergrowth that climbs past the tree line, and flocks of boids over it.
+    </figcaption>
+  </figure>
+  <figure>
+    <img src="media/monument.jpg" alt="Red desert with two sandstone buttes and more of them fading into haze at the horizon." width="1600" height="900">
+    <figcaption>
+      Monument Valley. The buttes on the horizon are the far field, kilometres out, built
+      from the same function that carved the ones in front.
+    </figcaption>
+  </figure>
+</div>
+
+<h2>Controls</h2>
+
+<ul>
+  <li>Drag to look. <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> to move, <kbd>Space</kbd> and <kbd>C</kbd> up and down, <kbd>Shift</kbd> to sprint.</li>
+  <li>The wheel flies towards whatever the cursor is over, so a thing can be approached without turning to face it. <kbd>+</kbd> and <kbd>-</kbd> change the speed.</li>
+  <li><kbd>K</kbd> starts a flyover that follows whatever is under the camera. Over a river it follows the river.</li>
+  <li>Click a bird to pick it out. With one picked, <kbd>K</kbd> chases it instead.</li>
+  <li><kbd>F2</kbd> opens the stats overlay. <kbd>P</kbd> switches to the ray-traced preview of the same world.</li>
+  <li><kbd>E</kbd> and <kbd>Q</kbd> place and remove voxels. Edits survive the chunk being regenerated.</li>
+</ul>
+
+<h2>Speed</h2>
+
+<p>
+  Measured at 1080p with everything on: near field, far field, textures, baked ambient
+  occlusion, block light, shadows and translucency. An Apple M3 holds its 60 Hz panel with
+  no dropped frames in both benchmark scenes. An Intel Arc B390 runs the same scenes at
+  120 Hz and drops a few frames of the fourteen hundred in each.
+</p>
+
+<footer>
+  <p>
+    Written in TypeScript and WGSL, built with Deno and esbuild, no runtime dependencies.
+    Apache 2.0.
+  </p>
+  <p>
+    <a href="https://github.com/wistrand/voxler">Source and design notes</a>
+  </p>
+</footer>
+
+</main>
+</body>
+</html>

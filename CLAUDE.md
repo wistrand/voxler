@@ -146,8 +146,9 @@ today `src/gpu/`, `src/render/`, `src/camera/`, `src/util/`, `src/debug/`,
 | `index.html`     | page shell, copied to `dist/` by the build                     |
 | `build.ts`       | esbuild bundling (`buildRelease()`, `watch()`)                 |
 | `serve.ts`       | static server for `dist/` with COOP/COEP headers               |
-| `dist/`          | build output, gitignored                                       |
+| `dist/`          | build output, gitignored; CI copies it into the published site under `play/` |
 | `agent_docs/`    | deep dives (linked below)                                      |
+| `docs/`          | the GitHub Pages site: landing page and screenshots, published with a demo built in CI (`docs/README.md`) |
 
 WGSL lives next to the TS that owns the pipeline (`src/render/cull.wgsl`, ...).
 
@@ -157,10 +158,21 @@ WGSL lives next to the TS that owns the pipeline (`src/render/cull.wgsl`, ...).
 deno task dev      # watch build + serve from 127.0.0.1:8000, or the next free port; PORT=<n> pins it
 deno task build    # clean release bundle into dist/; fails on any esbuild warning
 deno task serve    # serve an existing dist/ without rebuilding
+deno task docs     # build, then serve the GitHub Pages site with no COOP/COEP, as Pages
+                   # serves it (127.0.0.1:8001; BASE=voxler to mirror the project subpath)
 deno task check    # type-check src/, build.ts, serve.ts
 deno task test     # unit tests; GPU tests use Deno's built-in WebGPU (skip without an adapter)
 deno task bench    # kernel benchmarks (meshing, palette compression, reduction)
 ```
+
+`docs` is the only one that does not send COOP/COEP, and that is the point of it: Pages
+cannot set headers, so the published site is not cross-origin isolated and
+`SharedArrayBuffer` is unavailable there. Previewing with `serve` would hide that. The
+engine has a path for it (the arena falls back to a plain `ArrayBuffer` and mesh jobs copy)
+and `docs` is how to check it still does. It serves at `/`; `BASE=voxler` puts it under the
+subpath a project site actually lives at (`https://<user>.github.io/<repo>/`), which is
+worth a look after touching a path in `docs/index.html`, because an absolute one works at
+the root and 404s once deployed.
 
 Server env for `dev` and `serve`: `HOST` (bind address, default `127.0.0.1`), `PORT`,
 and `TLS_CERT` + `TLS_KEY` (PEM paths). Certs live in the gitignored `.certs/`; the

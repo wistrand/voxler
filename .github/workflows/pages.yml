@@ -1,0 +1,77 @@
+# Publishes docs/ to GitHub Pages with a freshly built demo under play/.
+#
+# No bundle is committed: `deno task build` runs here and its dist/ is copied into the
+# artifact. dist/ is gitignored, so the repo never carries build output.
+#
+# Needs Pages turned on for the repo with its source set to GitHub Actions
+# (Settings > Pages > Build and deployment > Source: GitHub Actions). Without that the
+# deploy step fails with a 404 and nothing else is wrong.
+#
+# `deno task check` is here because `build` does not type-check, and the suite runs before
+# the build so a red test stops a deploy rather than publishing over it. The GPU tests ask
+# for an adapter and log a skip when there is none, so a runner without a GPU is fine.
+
+name: pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# One deploy at a time, and a newer push wins: the site only ever shows one commit.
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
+      - name: Type-check
+        run: deno task check
+
+      - name: Test
+        run: deno task test
+
+      - name: Build the demo
+        run: deno task build
+
+      - name: Assemble the site
+        run: |
+          set -eu
+          mkdir -p _site/play
+          cp -R docs/. _site/
+          cp -R dist/. _site/play/
+          # The demo has to be reachable at play/ or the page's only button is dead.
+          test -f _site/index.html
+          test -f _site/play/index.html
+          test -f _site/play/main.js
+          test -d _site/play/workers
+          ls -la _site _site/play
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
