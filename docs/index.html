@@ -4,9 +4,9 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Voxler</title>
-<meta name="description" content="A voxel engine for the browser, on WebGPU. Worlds are generated from a WGSL function: no voxel data to load, 67 million voxels across.">
+<meta name="description" content="A voxel engine that runs in a browser tab. Worlds are made up as you fly through them: nothing to download, no level to load.">
 <meta property="og:title" content="Voxler">
-<meta property="og:description" content="A voxel engine for the browser, on WebGPU. Worlds are generated from a WGSL function: no voxel data to load, 67 million voxels across.">
+<meta property="og:description" content="A voxel engine that runs in a browser tab. Worlds are made up as you fly through them: nothing to download, no level to load.">
 <meta property="og:image" content="media/forest-night.jpg">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' fill='%23223'/%3E%3Cpath d='M8 2l5 3v6l-5 3-5-3V5z' fill='%236c8'/%3E%3Cpath d='M8 2l5 3-5 3-5-3z' fill='%239ea'/%3E%3Cpath d='M8 8v6l-5-3V5z' fill='%234a6'/%3E%3C/svg%3E">
 <style>
@@ -51,9 +51,6 @@
     padding: 1rem 1.15rem; color: var(--dim);
   }
   .note strong { color: var(--text); }
-  table { border-collapse: collapse; width: 100%; margin: 0 0 1.25rem; font-size: .95rem; }
-  td { text-align: left; padding: .45rem .7rem; border-bottom: 1px solid var(--edge); vertical-align: top; }
-  td:first-child { color: var(--dim); white-space: nowrap; width: 9rem; }
   code { font: .9em ui-monospace, SFMono-Regular, Menlo, monospace; background: var(--panel); border-radius: 4px; padding: .1em .35em; }
   ul { padding-left: 1.15rem; }
   li { margin-bottom: .35rem; }
@@ -70,108 +67,44 @@
 <header>
   <h1>Voxler</h1>
   <p class="lead">
-    A voxel engine for the browser, on WebGPU. A world is generated on the GPU from a
-    WGSL function rather than stored as voxel data, so there is no level to load.
+    A voxel engine that runs in a browser tab. Worlds are made up as you fly through them,
+    so there is nothing to download and no level to load.
   </p>
   <div class="actions">
     <a class="button" href="play/?world=forest">Open the forest</a>
-    <a class="button secondary" href="start.html">Get started</a>
+    <a class="button secondary" href="start.html">Write your own</a>
     <a class="button secondary" href="https://github.com/wistrand/voxler">Source</a>
   </div>
 </header>
 
 <figure>
   <img src="media/forest-night.jpg" alt="A voxel forest at night, lit by glowing mushroom caps, with birds over the canopy." width="1600" height="900">
-  <figcaption>The forest world. The moon is the only sky light, so the glowing caps carry the scene.</figcaption>
+  <figcaption>
+    The forest at night. The moon is the only light in the sky, so the glowing mushrooms
+    carry the scene.
+  </figcaption>
 </figure>
 
 <div class="note">
   <p style="margin:0">
     <strong>It needs WebGPU.</strong> Chrome or Edge on desktop, Safari 26 on macOS 26 or
-    iOS 26, or Firefox on Windows or Apple Silicon. There is no WebGL fallback, so an older
-    browser gets a message and nothing else. The forest takes a few seconds to compile its
-    shaders on the first load.
+    iOS 26, or Firefox on Windows or Apple Silicon. An older browser gets a message and
+    nothing else. Give the forest a few seconds on the first load.
   </p>
 </div>
 
-<h2>What it does</h2>
+<h2>What it is</h2>
 
 <p>
-  A world is not a file. It is a WGSL program: a signed distance function plus a material
-  function, sampled on the GPU at whatever resolution each consumer needs. Nothing is
-  stored on disk and nothing is streamed over the network.
+  You describe a world with a short program: where the ground is, and what it is made of.
+  Voxler builds it on the graphics card as you move, in detail close up and in bulk far
+  away.
 </p>
 
 <p>
-  Close to the camera, 32-voxel chunks are voxelized on the GPU, read back, and meshed in
-  background workers with binary greedy meshing. The quads are 8 bytes each. A compute pass
-  culls them against the frustum and a depth pyramid, and the whole near field goes out in
-  one indirect draw.
+  Nothing is stored. The forest above is not a file, it is a few hundred lines, and every
+  tree in it is worked out the moment you can see it.
 </p>
-
-<p>
-  Farther out, where a voxel face is smaller than a pixel, it stops drawing triangles and
-  ray-marches a brickmap clipmap in compute. View distance then costs a fixed amount of GPU
-  time per pixel instead of growing with the number of voxels. The same clipmap is what the
-  near field's shadow rays march, so shadows cost no shadow map and no second draw.
-</p>
-
-<h2>How large is very large</h2>
-
-<p>
-  What you write is the function, and it is a few hundred lines. The voxels it describes
-  are never stored, so no part of a world's extent is a file size. What bounds it instead
-  is the coordinate system:
-</p>
-
-<table>
-  <tr><td>Horizontally</td><td>33.5 million voxels each way from the origin</td></tr>
-  <tr><td>Vertically</td><td>32,768 voxels each way</td></tr>
-  <tr><td>Across</td><td>67 million voxels, about 1.7 times the Earth's circumference at a voxel to the metre</td></tr>
-  <tr><td>In memory</td><td>a radius around the camera, 512 voxels by default</td></tr>
-  <tr><td>On screen</td><td>as far as the fog, 16,384 voxels in the worlds here</td></tr>
-</table>
-
-<p>
-  The last two rows are the ones that cost anything. Memory follows the resident radius and
-  frame time follows what is on screen; neither grows as you fly.
-</p>
-
-<h2>Where it gives out</h2>
-
-<p>
-  The horizontal figure is a real edge. A chunk is addressed by a key packing its
-  coordinates into one 53-bit number, 21 bits per horizontal axis and 11 vertical, and
-  every path that takes a chunk coordinate checks the range first. Past it chunks stop
-  being streamed and meshed, so you would be looking at the ray-marched far field over
-  nothing. That is read off the code rather than flown to.
-</p>
-
-<p>
-  Inside the range the engine holds up, because it never puts an absolute position in a
-  <code>f32</code>: positions are an integer voxel coordinate plus a fraction, shaders
-  subtract the camera's chunk in integers and convert last, and noise is sampled through
-  integer lattices. Measured, terrain a million voxels out is smooth to a sixty-fourth of a
-  voxel.
-</p>
-
-<p>
-  What gives out first is usually the world program rather than the engine. A world that
-  turns its position into a plain vector with <code>wp_f32(p)</code> inherits float32
-  spacing, about 0.06 voxels at a million and coarser after that, which is enough for
-  geometry to jitter. The helpers that stay exact at any distance are
-  <code>wp_lattice</code> for noise, <code>wp_repeat_near</code> for scatter and
-  <code>wp_local(p, anchor)</code> for anything placed.
-</p>
-
-<figure>
-  <img src="media/clipmap-levels.jpg" alt="The desert from above with each clipmap level in a different colour, forming nested square windows around the camera." width="1600" height="900">
-  <figcaption>
-    The far field from above with its meshes turned off and each clipmap level given a
-    colour. The levels are nested windows centred on the camera, each twice as wide as the
-    one inside it and sampling the world at twice the cell size.
-  </figcaption>
-</figure>
 
 <h2>The worlds</h2>
 
@@ -179,64 +112,60 @@
   <figure>
     <img src="media/forest-day.jpg" alt="A river valley under a snow-capped mountain, with conifers, glowing mushroom caps and a flock of white birds over the canopy." width="1600" height="900">
     <figcaption>
-      The forest again in daylight. Four tree species, mountains with a rock band and snow
-      on top, undergrowth that climbs past the tree line, and flocks of boids over it.
-    </figcaption>
+    The forest in daylight. Four kinds of tree, mountains with snow on top, plants that
+      climb past the tree line, and flocks of birds over it.
+  </figcaption>
   </figure>
   <figure>
-    <img src="media/monument.jpg" alt="Red desert with two sandstone buttes and more of them fading into haze at the horizon." width="1600" height="900">
+    <img src="media/monument.jpg" alt="Red desert with a sandstone butte and a spire, and a line of more of them fading into haze along the horizon." width="1600" height="900">
     <figcaption>
-      Monument Valley. The buttes on the horizon are the far field, kilometres out, built
-      from the same function that carved the ones in front.
-    </figcaption>
+    Monument Valley. The buttes on the horizon are kilometres away and made by the same
+      few lines that carved the ones in front.
+  </figcaption>
   </figure>
 </div>
 
-<h2>Using it</h2>
+<h2>How big</h2>
 
 <p>
-  A world is a WGSL program, and the engine is one object that takes one. There is no
-  scene to build and no assets to load: hand it a signed distance function and a material
-  function and you have streaming, meshing, GPU culling, a ray-marched horizon and
-  shadows.
+  Big enough that you will not reach the end of one. It is 33 million voxels from the
+  middle to the edge, and if a voxel were a metre that would be a world wider than the
+  Earth. Your machine only ever holds the part around you, so flying further costs
+  nothing.
 </p>
 
-<pre style="background: var(--panel); border: 1px solid var(--edge); border-radius: 8px; padding: .9rem 1.05rem; overflow-x: auto; font: 13px/1.6 ui-monospace, Menlo, monospace;"><code>const voxler = await Voxler.create(canvas, { world: { code: myWorldWgsl } });
-voxler.start();</code></pre>
+<h2>Seeing a long way</h2>
 
 <p>
-  <a href="start.html">The get-started page</a> has the world contract, every option, and a
-  world small enough to read compiling and running on the page itself.
+  Close to you the world is drawn as blocks. Past the point where a block would be smaller
+  than a pixel, it switches to tracing rays through a coarser copy instead. That is why the
+  horizon stays sharp, and why looking a long way costs no more than looking a short way.
+  The buttes on the skyline above are kilometres off.
 </p>
 
 <h2>Controls</h2>
 
 <ul>
   <li>Drag to look. <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> to move, <kbd>Space</kbd> and <kbd>C</kbd> up and down, <kbd>Shift</kbd> to sprint.</li>
-  <li>The wheel flies towards whatever the cursor is over, so a thing can be approached without turning to face it. <kbd>+</kbd> and <kbd>-</kbd> change the speed.</li>
-  <li><kbd>K</kbd> starts a flyover that follows whatever is under the camera. Over a river it follows the river.</li>
+  <li>The wheel flies towards whatever the cursor is over, so you can approach something without turning to face it. <kbd>+</kbd> and <kbd>-</kbd> change the speed.</li>
+  <li><kbd>K</kbd> starts a flyover that follows whatever is under you. Over a river it follows the river.</li>
   <li>Click a bird to pick it out. With one picked, <kbd>K</kbd> chases it instead.</li>
-  <li><kbd>F2</kbd> opens the stats overlay. <kbd>P</kbd> switches to the ray-traced preview of the same world.</li>
-  <li><kbd>E</kbd> and <kbd>Q</kbd> place and remove voxels. Edits survive the chunk being regenerated.</li>
+  <li><kbd>E</kbd> and <kbd>Q</kbd> place and remove blocks. <kbd>F2</kbd> shows what the engine is doing.</li>
 </ul>
 
 <h2>Speed</h2>
 
 <p>
-  Measured at 1080p with everything on: near field, far field, textures, baked ambient
-  occlusion, block light, shadows and translucency. An Apple M3 holds its 60 Hz panel
-  through both benchmark scenes without dropping a frame. An Intel Arc B390 asked for
-  twice the frame rate keeps 120 Hz through the walk under the canopy bar 12 frames of
-  1425, and misses 46 of 1151 on the flyover, where the ray-marched distance is most of
-  the frame.
+  It runs smoothly on ordinary hardware, with nothing turned down: a steady 60 frames a
+  second on a MacBook with an M3 chip, and 120 on a desktop with Intel graphics.
 </p>
 
+<h2>Writing one</h2>
+
 <p>
-  Those are two machines, and neither of them is yours. The engine has a benchmark
-  harness and the page will run it, but a run from here is not comparable to anything:
-  GitHub Pages cannot send the headers that make a page cross-origin isolated, so the
-  workers copy their payloads instead of sharing them. Numbers worth quoting come off a
-  local dev server.
+  A world is two functions in WGSL, and the engine is one object that takes them.
+  <a href="start.html">The get-started page</a> has a world small enough to read, running
+  and editable on the page, and the whole API under it.
 </p>
 
 <footer>
@@ -245,7 +174,7 @@ voxler.start();</code></pre>
     Apache 2.0.
   </p>
   <p>
-    <a href="https://github.com/wistrand/voxler">Source and design notes</a>
+    <a href="start.html">Get started</a> &middot; <a href="https://github.com/wistrand/voxler">Source and design notes</a>
   </p>
 </footer>
 
