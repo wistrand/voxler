@@ -30,10 +30,14 @@ export interface WorldProgram {
 }
 
 export const WORLDS: Readonly<Record<string, WorldEntry>> = {
-  // The floor near the origin is about 94 and the canopy tops out near 112: the spawn
-  // stands over it, so the drop the grove bench scene takes lands under the trees.
+  // The floor under the spawn is 132 and the canopy within forty voxels tops out at 179:
+  // the spawn stands over both, so the drop the grove bench scene takes lands under the
+  // trees rather than in them. Measured from the chunk store, not guessed, and it has to
+  // be measured again whenever the terrain's amplitudes move: a stale spawn puts the
+  // camera inside the hill and every bench number it produces is for an empty frame
+  // (gotchas.md "The grove bench walked 44 voxels underground").
   // A night wood: the moon is the only sky light, so the glowing plants carry the scene.
-  forest: { code: forest, spawn: [8, 120, 8], sky: "night" },
+  forest: { code: forest, spawn: [8, 188, 8], sky: "night" },
   // The floor is near y = 40 and the buttes stand a few hundred voxels over it; the
   // spawn is out on the open desert looking at them rather than under one.
   // The monuments stand a kilometre apart over an empty floor, so nearly every brick

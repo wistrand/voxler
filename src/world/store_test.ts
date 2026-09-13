@@ -122,3 +122,23 @@ Deno.test("store reports full instead of overflowing", () => {
   assert(small.put(0, 0, 0, dense) >= 0, "first dense block fits");
   assert(small.put(1, 0, 0, dense) === -1 && small.count === 1, "arena full, slot returned");
 });
+
+Deno.test("blockAt reads the same voxels as read(), at every index width", () => {
+  // The non-allocating path decodes the block layout by hand, so it is a second reader
+  // of a format with one owner (design-formats.md "Chunk storage"). Widths 0, 1, 2, 4, 8
+  // and 16 bits, which is every packing the container can produce.
+  const store = new ChunkStore({ maxChunks: 64, arenaBytes: 4 << 20, shared: false });
+  const cases = [1, 2, 3, 5, 17, 300];
+  cases.forEach((distinct, i) => {
+    const ids = denseWith(distinct, 7 + i);
+    const data = ChunkData.fromDense(ids);
+    assert(store.put(i, 0, 0, data) >= 0, `put ${distinct}`);
+    const view = store.read(store.handle(i, 0, 0))!;
+    for (let v = 0; v < CHUNK_VOLUME; v += 7) {
+      const want = view.get(v);
+      const got = store.blockAt(i, 0, 0, v);
+      assert(got === want, `distinct ${distinct} voxel ${v}: blockAt ${got}, read ${want}`);
+    }
+  });
+  assert(store.blockAt(999, 0, 0, 0) === -1, "a chunk that is not stored reads as -1");
+});

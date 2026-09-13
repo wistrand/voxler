@@ -1,4 +1,12 @@
-import { DEFAULT_FOLLOW, Follow, type FollowState, MAX_HEIGHT, MIN_HEIGHT, raiseHeight } from "./follow.ts";
+import {
+  type BlockAt,
+  DEFAULT_FOLLOW,
+  Follow,
+  type FollowState,
+  MAX_HEIGHT,
+  MIN_HEIGHT,
+  raiseHeight,
+} from "./follow.ts";
 
 function assert(cond: boolean, what: string): void {
   if (!cond) throw new Error(what);
@@ -167,4 +175,143 @@ Deno.test("a column that is not resident does not steer the flight", () => {
   const before = s.yaw;
   for (let i = 0; i < 300; i++) f.step(s, 1 / 60);
   assert(Math.abs(s.yaw - before) < 1e-6, "should hold its heading rather than hunt");
+});
+
+Deno.test("it clears a cliff instead of flying into it", () => {
+  // Flat at 100 until z = -300, then a wall to 220: taller than the flight's line, so
+  // the only way through is over.
+  const at = (x: number, y: number, z: number): number => {
+    const ground = z < -300 ? 220 : 100;
+    return y <= ground ? 1 : 0;
+  };
+  const f = new Follow(at);
+  const s = pose(0, 0, 0);
+  f.start(s);
+  let worst = Infinity;
+  for (let i = 0; i < 60 * 60; i++) {
+    f.step(s, 1 / 60);
+    const ground = s.z < -300 ? 220 : 100;
+    worst = Math.min(worst, s.y - ground);
+    assert(s.y > ground, `flew into the cliff at z ${Math.round(s.z)}, y ${s.y} against ${ground}`);
+  }
+  assert(s.z < -300, `should have crossed the cliff, got z ${Math.round(s.z)}`);
+  assert(worst >= MIN_HEIGHT - 1, `came within ${worst.toFixed(1)} of the rock`);
+});
+
+Deno.test("it clears a tree it would otherwise fly through", () => {
+  // A single trunk in the way, forty voxels over the canopy line the flight holds.
+  const at = (x: number, y: number, z: number): number => {
+    if (y <= 100) return 1;
+    return Math.abs(x) < 4 && z > -420 && z < -400 && y <= 160 ? 2 : 0;
+  };
+  const f = new Follow(at);
+  const s = pose(0, 0, 0);
+  f.start(s);
+  for (let i = 0; i < 60 * 40; i++) {
+    f.step(s, 1 / 60);
+    assert(at(s.x, s.y, s.z) === 0, `inside a block at ${Math.round(s.x)}, ${Math.round(s.y)}, ${Math.round(s.z)}`);
+  }
+  assert(s.z < -420, `should have passed the tree, got z ${Math.round(s.z)}`);
+});
+
+Deno.test("it moves at the same speed whether it climbs or not", () => {
+  // A long ramp: the flight has to lift the whole way, and lifting must come out of the
+  // same budget as going forward rather than adding to it.
+  const ramp = (x: number, y: number, z: number): number => (y <= 100 - z / 4 ? 1 : 0);
+  const travel = (at: BlockAt) => {
+    const f = new Follow(at);
+    const s = pose(0, 0, 0);
+    f.start(s);
+    let moved = 0;
+    for (let i = 0; i < 60 * 20; i++) {
+      const x = s.x, y = s.y, z = s.z;
+      f.step(s, 1 / 60);
+      moved += Math.hypot(s.x - x, s.y - y, s.z - z);
+    }
+    return moved / 20; // voxels a second through the air
+  };
+  const flat = travel(world(() => false));
+  const climbing = travel(ramp);
+  assert(Math.abs(flat - DEFAULT_FOLLOW.speed) < 0.5, `flat flight moved at ${flat.toFixed(1)}`);
+  assert(
+    Math.abs(climbing - flat) < 1.0,
+    `climbing moved at ${climbing.toFixed(1)} against ${flat.toFixed(1)} on the flat`,
+  );
+});
+
+Deno.test("the lift over an obstacle arrives as a ramp, not a step", () => {
+  // The corridor probe is a handful of points, so an obstacle crosses one probe at a
+  // time. Asking each probe for clearance on a glide slope is what keeps that from
+  // reading as a jolt: what must stay bounded is the change in vertical speed and in
+  // pitch from one frame to the next, not their size.
+  const at = (_x: number, y: number, z: number): number => (y <= (z < -400 ? 200 : 100) ? 1 : 0);
+  const f = new Follow(at);
+  const s = pose(0, 0, 0);
+  f.start(s);
+  const dt = 1 / 60;
+  let lastRate = 0;
+  let lastPitch = s.pitch;
+  let worstRate = 0;
+  let worstPitch = 0;
+  for (let i = 0; i < 60 * 40; i++) {
+    const y = s.y;
+    f.step(s, dt);
+    const rate = (s.y - y) / dt;
+    if (i > 0) {
+      worstRate = Math.max(worstRate, Math.abs(rate - lastRate));
+      worstPitch = Math.max(worstPitch, Math.abs(s.pitch - lastPitch));
+    }
+    lastRate = rate;
+    lastPitch = s.pitch;
+  }
+  assert(s.z < -400, `should have crossed the step, got z ${Math.round(s.z)}`);
+  // The vertical rate is eased like the turn rate, so what is bounded is its change: at
+  // most its whole range in one of its own time constants.
+  const bound = 2 * DEFAULT_FOLLOW.speed * (dt / DEFAULT_FOLLOW.liftSmoothing);
+  assert(worstRate <= bound, `vertical speed jumped by ${worstRate.toFixed(1)} in one frame, over ${bound.toFixed(1)}`);
+  assert(worstPitch <= 0.01, `pitch jumped by ${worstPitch.toFixed(4)} rad in one frame`);
+});
+
+Deno.test("a flight raised to the top of its range still sees the ground", () => {
+  // The probe depth has to cover MAX_HEIGHT. Under it, a raised flight finds nothing
+  // below: it keeps neither the height it was started at (the probe returns NaN, so
+  // `start` falls back to the default and the camera drops hundreds of voxels) nor the
+  // material it was following.
+  const f = new Follow(world((x) => Math.abs(x) < 15));
+  const s = pose(0, 0, 0);
+  s.y = 100 + MAX_HEIGHT - 20;
+  assert(f.start(s) === WATER, "should still pick up the water far below it");
+  assert(Math.abs(f.height - (MAX_HEIGHT - 20)) < 1, `should have kept its height, got ${f.height}`);
+  for (let i = 0; i < 600; i++) f.step(s, 1 / 60);
+  assert(Math.abs(s.y - (100 + MAX_HEIGHT - 20)) < 2, `should have held its altitude, got ${s.y}`);
+  assert(f.matched > 0, "should still have the river in front of it");
+});
+
+Deno.test("switching the flight off and on does not carry the old rates over", () => {
+  // Everything the flight does is a low pass, and a low pass that is not reset starts
+  // the next flight mid-turn and mid-climb.
+  const shape = (x: number, z: number) => z < -40 && x < -40;
+  const f = new Follow(world(shape));
+  const s = pose(0, 0, 0);
+  f.start(s);
+  f.height = 160; // a flight that is climbing hard when it is switched off
+  for (let i = 0; i < 200; i++) f.step(s, 1 / 60);
+  // A restarted flight has to take the same first steps as one that never ran, which is
+  // a stronger check than "it does not move": the first step may well turn and climb,
+  // it just must not carry the last flight's rates into doing so.
+  const restarted = pose(0, 0, 0);
+  f.start(restarted);
+  const clean = new Follow(world(shape));
+  const virgin = pose(0, 0, 0);
+  clean.start(virgin);
+  let worstY = 0;
+  for (let i = 0; i < 120; i++) {
+    f.step(restarted, 1 / 60);
+    clean.step(virgin, 1 / 60);
+    worstY = Math.max(worstY, Math.abs(restarted.y - virgin.y));
+  }
+  assert(worstY < 1e-9, `y drifted ${worstY} from a fresh flight during the first seconds`);
+  assert(Math.abs(restarted.yaw - virgin.yaw) < 1e-9, `yaw drifted ${restarted.yaw - virgin.yaw} from a fresh flight`);
+  assert(Math.abs(restarted.y - virgin.y) < 1e-9, `y drifted ${restarted.y - virgin.y} from a fresh flight`);
+  assert(Math.abs(restarted.pitch - virgin.pitch) < 1e-9, `pitch drifted from a fresh flight`);
 });

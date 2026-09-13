@@ -209,10 +209,19 @@ on amplitude and not on extra octaves.
 **Landed.** Asked for as "we can have fewer pillars but increase lod", and the two halves
 pay for each other.
 
-Fewer: the lattice went from 920 to 1,150 voxels and the hit rate from at most 37% of
-cells to at most 14%, which is a bit over a quarter of the monuments the world started
-with, or about one per fifteen square kilometres. That is roughly the real density, and it
-is what stops the horizon reading as a picket fence.
+Fewer: the lattice went from 920 to 1,150 voxels, and the hit rate from a flat 37% of
+cells to `0.15 + 0.85 * group_density(id)`, so the empty desert is nearly empty and a
+group is nearly full. That is what stops the horizon reading as a picket fence, and each
+monument that is not there is far-field march and brick pool spent on one that is.
+
+The rate has been re-tuned once since, and the numbers here are the tuned ones. The first
+tuning was done against a placement bug: the 3x3 neighbour loop offset the sample point by
+a whole cell and then called `wp_repeat`, which is periodic and ate the offset, so every
+cell drew nine monuments around its own centre, each clipped at the boundary it crossed
+([gotchas.md](gotchas.md) "Domain repetition loses the neighbour offset"). `wp_repeat_near`
+fixed it and divided every population in the world by nine, so every acceptance rate here
+and in the forest had to be set again from scratch. **A rate tuned by eye is tuned against
+whatever the placement was doing at the time.**
 
 Finer: a world can now override the clipmap for itself (`far` in `src/worlds/index.ts`,
 `?farSize=n` to try one), and the monument valley asks for six levels of 64^3 bricks

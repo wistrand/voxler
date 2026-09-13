@@ -130,6 +130,23 @@ export class ChunkStore {
     return uniform >= 0 ? ChunkData.uniform(uniform) : this.arena.read(this.slotOffset[slot]);
   }
 
+  // One voxel's block id from a stored chunk, or -1 when the chunk is not stored.
+  // `index` is a `voxelIndex()` within the chunk. Allocates nothing, unlike `read()`,
+  // which is what anything walking a column of voxels needs (arena.ts `blockAt`).
+  blockAt(cx: number, cy: number, cz: number, index: number): number {
+    const slot = this.table.get(chunkKey(cx, cy, cz));
+    return slot === -1 ? -1 : this.blockAtSlot(slot, index);
+  }
+
+  // The same, for a caller that already has the slot from `slotOf()`. A column of voxels
+  // crosses one chunk every 32 steps, so holding the slot across them turns a hash probe
+  // per voxel into one per chunk, and a uniform chunk (open air, deep rock) answers
+  // without touching the arena at all. `raycast.ts` does the same.
+  blockAtSlot(slot: number, index: number): number {
+    const uniform = this.slotUniform[slot];
+    return uniform >= 0 ? uniform : this.arena.blockAt(this.slotOffset[slot], index);
+  }
+
   // Arena byte offset of a stored chunk's block, or -1 for uniform or stale. With a
   // shared arena, workers read the block at this offset (arena.ts readParts()).
   blockOffset(handle: number): number {

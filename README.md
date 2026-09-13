@@ -17,14 +17,17 @@ GPU time per pixel rather than growing with the number of voxels.
 
 Working, and fast enough to be worth looking at. Worlds voxelize on the GPU into
 compressed chunk storage, are meshed in workers, culled and drawn as greedy quads by
-vertex pulling, and continue past the meshed radius as a ray-marched brickmap out to
-32,768 voxels. Surfaces carry baked ambient occlusion and baked light from glowing
-blocks, and cast shadows from the sun or moon. Voxels can be edited and the edits
-survive the chunk being regenerated. A ray-traced preview of the same world is one key
-away, though for a heavy world it takes a while to compile the first time.
+vertex pulling, and continue past the meshed radius as a ray-marched brickmap that
+reaches as far as the fog lets the eye see. Surfaces carry baked ambient occlusion and
+baked light from glowing blocks, and cast shadows from the sun or moon. Voxels can be
+edited and the edits survive the chunk being regenerated. A ray-traced preview of the
+same world is one key away, though for a heavy world it takes a while to compile the
+first time.
 
-Three worlds ship: a showcase of the SDF primitives, a terrain world, and a fantasy
-forest at night with glowing fungus, lakes and mountains.
+Four worlds ship: a showcase of the SDF primitives, a terrain world, a fantasy forest at
+night with glowing fungus, lakes, waterfalls and mountains, and a desert of Monument
+Valley buttes. Pressing K starts a flyover that follows whatever is under the camera,
+which over a river follows the river.
 
 ## Requirements
 

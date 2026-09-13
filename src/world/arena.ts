@@ -31,18 +31,27 @@ function classOf(bytes: number): number {
   return log - MIN_CLASS_LOG;
 }
 
+// log2(bits) for the packed index widths, as in chunk.ts `get()`.
+const LOG2: Readonly<Record<number, number>> = { 1: 0, 2: 1, 4: 2, 8: 3, 16: 4 };
+
 export class PayloadArena {
   readonly buffer: ArrayBuffer | SharedArrayBuffer;
   readonly shared: boolean;
   private top = 0; // bump pointer, bytes
   private readonly freeLists: number[][] = Array.from({ length: CLASSES }, () => []);
   private used = 0; // bytes in live blocks (class sizes)
+  // Whole-buffer views, built once, so `blockAt()` can decode a voxel without making a
+  // view per call. Read-only: everything that writes goes through writeBlock().
+  private readonly u32: Uint32Array;
+  private readonly u16: Uint16Array;
 
   // `shared`: SharedArrayBuffer when the page can share memory, else ArrayBuffer.
   constructor(bytes: number, shared: boolean) {
     this.buffer = shared ? allocShared(bytes) : new ArrayBuffer(bytes);
     // The SharedArrayBuffer global is missing in non-isolated pages; guard the check.
     this.shared = typeof SharedArrayBuffer === "function" && this.buffer instanceof SharedArrayBuffer;
+    this.u32 = new Uint32Array(this.buffer);
+    this.u16 = new Uint16Array(this.buffer);
   }
 
   get capacityBytes(): number {
@@ -96,6 +105,23 @@ export class PayloadArena {
   // on it; edits go through ChunkStore.put().
   read(offset: number): ChunkData {
     return ChunkData.fromParts(readParts(this.buffer, offset));
+  }
+
+  // One voxel's block id out of a block, allocating nothing. `read()` builds three
+  // typed-array views, a `ChunkParts` and a `ChunkData` every call, which is right for a
+  // job that then reads the whole chunk and wrong for anything that walks a column of
+  // voxels: the follow flyover reads a few thousand a frame, and at five objects each
+  // that is the GC in the frame path (CLAUDE.md "Never allocate in the per-frame path").
+  // `index` is a `voxelIndex()`. Decodes the same layout as `ChunkData.get()`.
+  blockAt(offset: number, index: number): number {
+    const w = offset >>> 2;
+    const bits = this.u32[w];
+    const palette = (offset + HEADER_BYTES) >>> 1; // in u16s
+    if (bits === 0) return this.u16[palette];
+    const words = (offset + HEADER_BYTES + pad4(this.u32[w + 1] * 2)) >>> 2;
+    const perWordLog = 5 - LOG2[bits];
+    const shift = (index & ((1 << perWordLog) - 1)) * bits;
+    return this.u16[palette + ((this.u32[words + (index >>> perWordLog)] >>> shift) & ((1 << bits) - 1))];
   }
 }
 

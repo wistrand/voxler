@@ -299,9 +299,10 @@ fn buttes(p: WorldPoint, ground: f32) -> vec2f {
       let q = wp_offset(p, -vec3f(shift));
       let id = wp_repeat_id(q, BUTTE_CELL);
       let r = cell_random(id, 1u);
-      // Under half the hit rate the world started with. A picket fence of monuments on
-      // the horizon is not what the valley looks like, and each one that is not there is
-      // far-field march and brick pool spent on the ones that are
+      // Nearly empty desert between nearly full groups, rather than a flat rate
+      // everywhere: a picket fence of monuments on the horizon is not what the valley
+      // looks like, and each one that is not there is far-field march and brick pool
+      // spent on the ones that are
       // (plan-monument-valley.md "Fewer monuments, sampled finer").
       if (r.x > 0.15 + 0.85 * group_density(id)) {
         continue;

@@ -34,7 +34,7 @@ import { canShareMemory } from "./workers/buffers.ts";
 import { BLOCKS } from "./world/blocks.ts";
 import { voxelIndex } from "./world/coords.ts";
 import { ChunkStore } from "./world/store.ts";
-import { chunkKey, keyX, keyY, keyZ } from "./world/keys.ts";
+import { chunkInRange, chunkKey, keyX, keyY, keyZ } from "./world/keys.ts";
 import { DEFAULT_MESH_OPTIONS, MESH_JOB, MeshScheduler } from "./world/mesh-scheduler.ts";
 import { CLUSTER_QUADS, ORDER_EMISSION, ORDER_MORTON } from "./mesh/cluster.ts";
 import { CULL_ALL, DEFAULT_NEAR_OPTIONS, type NearFieldOptions } from "./render/near-field.ts";
@@ -89,7 +89,8 @@ const DEFAULT_VOXEL_SLOTS = 8;
 
 const CONTROLS_HELP = "drag: look (mouse or touch)  WASD move  Space/C up/down  Shift sprint\n" +
   "wheel: fly to and from the cursor  +/- speed\n" +
-  "F2 overlay  P preview  G grid  M meshes  (overlay text is selectable)\n" +
+  "F2 overlay (its text is selectable)  P preview  G grid  M meshes\n" +
+  "K follow the ground below the camera; +/- set its speed and Space/C its height while it flies\n" +
   "E place  Q remove  R rotate (Shift+R back)  B block  X shape  Z undo  Y redo\n" +
   `?world=${Object.keys(WORLDS).join("|")}&seed=n  ?at=x,y,z teleports on load\n` +
   "?previewScale=0.1..1  ?workers=n pool size  ?jobBatch=n jobs per worker message  ?workerTest\n" +
@@ -616,6 +617,35 @@ function prefixed(prefix: string, stats: object): Record<string, number> {
   return out;
 }
 
+// How long a bench waited for the world before it started, and the longest it will.
+let benchWaitedMs = -1;
+const BENCH_READY_TIMEOUT_MS = 90_000;
+
+// A benchmark must not start before the world it is measuring exists. The renderer is
+// handed over as soon as it can draw a sky; its pipelines, its clipmap and its chunks
+// arrive over the seconds after that, and a run started then measures an empty frame.
+// What that looks like is not an error but a good result: no meshes to draw, no bricks to
+// march, `resident` 0 and a GPU time of nothing
+// (gotchas.md "A bench that starts before the world is built").
+//
+// Three things have to be true, and the warm-up is not one of them: it is a settling
+// time, not a wait for the world. The timeout is there so a world that never settles
+// still produces a result, and `readyMs` in the result says how long it took.
+function benchReady(renderer: Renderer, now: number): boolean {
+  if (benchWaitedMs >= 0) return true;
+  const ready = WORLD_STAGES.every((name) => renderer.startup[name] !== undefined) &&
+    renderer.far.stats.queued === 0 &&
+    (!streaming || streamer.stats.holes === 0);
+  if (ready || now >= BENCH_READY_TIMEOUT_MS) {
+    benchWaitedMs = Math.round(now);
+    hud.status(""); // or the waiting line stays up for the whole run
+    if (!ready) overlay.error(`bench started before the world settled, after ${(now / 1000).toFixed(0)}s`);
+    return true;
+  }
+  hud.status("building the world before the benchmark");
+  return false;
+}
+
 // Environment for a finished benchmark run; defined once so record() gets the same
 // function every frame instead of a new closure.
 function benchContext(): BenchContext {
@@ -636,6 +666,7 @@ function benchContext(): BenchContext {
       }
       : null,
     caps: gpu.caps,
+    readyMs: benchWaitedMs,
     counters: renderer.counters,
     pool,
     width: canvas.width,
@@ -655,7 +686,7 @@ function frame(now: number): void {
   // A benchmark drives the camera only once there is something to render.
   stats.begin(CPU_UPDATE);
   if (bench) {
-    if (renderer) bench.drive(now, camera, renderer.timer);
+    if (renderer && benchReady(renderer, now)) bench.drive(now, camera, renderer.timer);
   } else if (following) {
     // The controls run first and the flight picks up whatever they did, so dragging the
     // view re-aims it and WASD nudges it sideways rather than being fought.
@@ -672,6 +703,7 @@ function frame(now: number): void {
     followState.y = camera.worldPosition(1);
     followState.z = camera.worldPosition(2);
     followState.yaw = camera.yaw;
+    probeKey = Number.NaN; // this frame's chunks, not last frame's
     follow.step(followState, dt);
     camera.setPosition(followState.x, followState.y, followState.z);
     camera.setOrientation(followState.yaw, followState.pitch);
@@ -871,12 +903,30 @@ try {
 // The follow-the-ground flyover (src/camera/follow.ts). It reads the chunk store, so it
 // follows whatever the near field has streamed; outside that it holds its heading.
 const followState: FollowState = { x: 0, y: 0, z: 0, yaw: 0, pitch: 0 };
+// The flight probes columns of voxels, thousands of them a frame, and two things keep
+// that off the frame budget. It reads through `store.blockAtSlot` and never `store.read`,
+// which builds five objects a call and at this rate is the GC in the frame path
+// (CLAUDE.md "Never allocate in the per-frame path"). And the chunk's slot is held across
+// the 32 voxels of a column that share it, so the table is probed once a chunk instead of
+// once a voxel, and a uniform chunk answers without touching the arena at all. The voxel
+// raycast caches the same way (`src/world/raycast.ts`).
+//
+// `probeKey` is cleared before every step, so a chunk that has streamed in, been evicted
+// or been regenerated since the last frame is never answered out of a stale slot.
+let probeKey = Number.NaN;
+let probeSlot = -1;
+let probeUniform = -1;
 const follow = new Follow((x, y, z) => {
-  const handle = store.handle(x >> 5, y >> 5, z >> 5);
-  if (handle < 0) return -1;
-  const chunk = store.read(handle);
-  if (chunk === null) return -1;
-  return chunk.get(voxelIndex(x & 31, y & 31, z & 31));
+  const cx = x >> 5, cy = y >> 5, cz = z >> 5;
+  if (!chunkInRange(cx, cy, cz)) return -1;
+  const key = chunkKey(cx, cy, cz);
+  if (key !== probeKey) {
+    probeKey = key;
+    probeSlot = store.slotOf(key);
+    probeUniform = probeSlot === -1 ? -1 : store.slotUniformId(probeSlot);
+  }
+  if (probeSlot === -1) return -1;
+  return probeUniform >= 0 ? probeUniform : store.blockAtSlot(probeSlot, voxelIndex(x & 31, y & 31, z & 31));
 });
 let following = false;
 
@@ -888,6 +938,7 @@ function toggleFollow(): void {
   followState.z = camera.worldPosition(2);
   followState.yaw = camera.yaw;
   followState.pitch = camera.pitch;
+  probeKey = Number.NaN;
   follow.start(followState);
 }
 

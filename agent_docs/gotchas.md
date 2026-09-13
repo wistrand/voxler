@@ -738,3 +738,167 @@ Diagnosed bugs, as symptom, diagnosis, fix, takeaway. None diagnosed yet.
   fails on the original bug; that was checked by reintroducing it.
 - **Takeaway:** when a binary format has one owner and hand-written readers, the readers
   are the format. Widening one is not done until something *fails* if a reader is missed.
+
+### What a heavy world costs to compile
+
+- **Measured cold** on the dev machine (Chrome 152, Arc B390), from `renderer.startup`,
+  with the browser's shader cache missed by perturbing the world source:
+
+  | World    | sky | near | voxelize | far  |
+  |----------|-----|------|----------|------|
+  | forest   | 76  | 140  | 120      | 140  |
+  | monument | 61  | 107  | 1394     | 1303 |
+
+  Milliseconds. The two world modules (the voxelizer's and the far-field builder's) are
+  started together and finish together, so the wait is the slower of them, not their sum.
+- **It is the world program, not the engine.** The forest and the monument valley run the
+  same engine and differ by a factor of ten, and what differs is how much SDF there is to
+  inline: a butte is a body, up to two tiers, a thumb and up to three pinnacles, each one
+  a call to the same substantial function.
+- **Loop unrolling is not the cause.** The obvious theory is that the 3x3 neighbourhood
+  loops are unrolled and the body inlined nine times. Forcing the compiler not to unroll
+  the monument's, with a loop bound it cannot fold, moved the numbers by nothing:
+  voxelize 1394 to 1569, far 1303 to 1261. Either it was not unrolling them or unrolling
+  is not where the time goes.
+- **Do not read a warm number as a cold one.** The same forest measured 229 ms on a page
+  that had been loaded dozens of times against 140 cold, and a heavier world can look
+  ten times faster warm. Change a byte of the world source before measuring.
+
+### A low-passed height flies into the hill it is following
+
+The follow flyover (`src/camera/follow.ts`) held `surface + height`, smoothed over a time
+constant so a one-voxel step in a river bed was not a step in the flight. Over rising
+ground that low pass is a lag, and a lag against a cliff is the camera inside the rock.
+Three things it needed, and none of them is a shorter time constant:
+
+- **Look along the corridor it is about to cross, not at the column it is over.** The
+  height it wants is the highest thing within the next lookahead, so the lift starts while
+  the obstacle is still ahead.
+- **Probe from above the camera.** A downward probe that starts at the camera finds the
+  ground at the foot of a cliff, never its rim, so the flight reads a wall as a floor and
+  aims at it. It starts `clearAbove` over the camera instead.
+- **Make the easing asymmetric.** Coming down is slow (it is cosmetic) and going up is
+  quick (it is not). Rising is the move that cannot end inside a hill, so when the two
+  disagree the flight lifts. The same asymmetry is in the rate limit: the climb rate grows
+  with how far there is to go, because a rate fixed at a walking pace cannot clear a
+  hundred-voxel wall inside the distance that saw it.
+
+The related one is about what a speed means. Moving at `speed` along the ground and
+climbing on top of that makes the camera fastest exactly where it is working hardest,
+which reads as a lurch. `speed` is speed *through the air*: the frame's travel budget is
+spent on the climb first and what is left goes forward, so a steep lift stops the flight
+advancing rather than speeding it up, and the perceived rate never changes.
+
+### A voxel probe through `ChunkStore.read` allocates a chunk per voxel
+
+`store.read(handle)` builds a `ChunkData` (and `ChunkData.uniform` a fresh palette) on
+every call, which is fine for the mesh scheduler and not fine for anything that walks a
+column of voxels: the follow flyover probes a few thousand a frame, and that was a few
+thousand objects a frame in the frame path (CLAUDE.md "Never allocate in the per-frame
+path"). One chunk answers 32 probes down a column, so the caller keeps the last one, keyed
+by `chunkKey`, and clears the key at the start of each frame so a chunk that has streamed
+in or been regenerated is never answered from the frame before. Anything else that reads
+voxels one at a time needs the same.
+
+### A bench that starts before the world is built measures an empty frame
+
+`Renderer` is handed to the frame loop as soon as it can draw a sky. Its pipelines, its
+clipmap and its chunks arrive over the seconds after that, and a benchmark started then
+measures a frame with nothing in it. What that looks like is not an error but a *good*
+result: `gpu.near.a` 0.07 ms, no `gpu.far.build` samples at all, `resident` 0, and an
+interval that holds 120 Hz comfortably. Two grove runs saved on 2026-09-13 (091102,
+091328) are exactly that, and they sit next to runs of the same build that cost 5 ms a
+frame in the far-field build.
+
+`benchReady()` in `src/main.ts` gates the session on three things, none of which the
+warm-up covers: every stage in `WORLD_STAGES` has recorded itself in `renderer.startup`,
+`far.stats.queued` is 0, and `streamer.stats.holes` is 0. It waits at most
+`BENCH_READY_TIMEOUT_MS` and then starts anyway with an error on the overlay, so a world
+that never settles still produces a result rather than hanging. Every result carries
+`readyMs`, the wait in milliseconds: **a result whose `readyMs` is missing was produced
+before this existed and its first run is suspect.** The forest takes about 2.2 seconds.
+
+The warm-up is a settling time, not a wait for the world, and no warm-up long enough to
+cover a cold pipeline compile would be a sensible warm-up.
+
+### A trunk that tapers under a voxel leaves its crown in the air
+
+The conifer's trunk tapered from `trunk_r * 1.9` at the foot to `trunk_r * 0.3` at the
+tip, which at the small end is under half a voxel: the voxelizer finds nothing there, so
+the top of the trunk simply does not exist, and the three or four tiers of needles it was
+carrying come out as separate slabs stacked in the air. From over a ridge, where conifers
+take over as the ground climbs to the tree line, that reads as a few trees floating.
+
+A taper is a number in an SDF and a voxel is a sampling rate; they have to be told about
+each other. `max(trunk_r * 0.3, 0.75)` is the whole fix. Anything a world draws thinner
+than about a voxel is not thin, it is absent, and what hangs off it is left hanging.
+
+Finding it took a connected-component pass over the chunk store rather than a screenshot:
+flood fill the plant blocks, count what never reaches the ground. **Discard any component
+that touches the box wall**, or the metric is dominated by trees whose trunk is simply
+outside the box: with the wall components counted the number was 9 blobs and did not move
+for four different changes, and with them discarded it was 2 blobs of 9 voxels.
+
+### A plant draped over the terrain is cheap, and anchoring it costs three times the world
+
+Every plant in the forest is placed at `local.y = y - ground`, the ground under the
+*sample point*, not under the plant's own foot. That drapes it: each column carries the
+plant at its own local ground, so on a slope the crown sits lower than the trunk and on a
+steep enough one it comes apart. It also means a tree's species and the tree line are
+decided per sample point, which is the thing
+[gotchas.md](gotchas.md) "A plant decided per sample point is a plant cut in half"
+says not to do.
+
+Anchoring it properly was built and measured and then taken out. It needs
+`land_height` at each accepted plant's base, which is the most expensive function in the
+world, and no reordering saves it: the tests that are cheap enough to run first do not
+reject enough. Two grove runs of each, both gated on a built world
+(`grove.20260913T091555Z` against `grove.20260913T091653Z`): `gpu.far.build` 4.98 ms p50
+against 21.04, missed frames 12 against 31, and the world takes 3.6 s to build instead of
+2.2. For a difference that a connected-component sweep of the near field could not
+measure at all: the forest's steepest wooded ground is a slope of about 0.44, which
+shears a crown by a dozen voxels and does not detach it.
+
+**The drape is the right trade at this relief and would not be at twice it.** What made
+the floating trees was the conifer's trunk, above.
+
+### Reading one voxel through `ChunkStore.read()` allocates five objects
+
+`read()` returns a `ChunkData` view, and building it makes three typed-array views, a
+`ChunkParts` and the `ChunkData` itself. That is the right shape for a job that then reads
+a whole chunk, and the wrong one for anything walking a column of voxels: the follow
+flyover probes about thirty-five columns a frame and was allocating roughly a thousand
+objects a frame in the frame path (CLAUDE.md "Never allocate in the per-frame path"). It
+showed as a 1.7 ms spike in an otherwise 0.05 ms step.
+
+Two things fix it, and both are needed:
+
+- **`ChunkStore.blockAt` / `blockAtSlot`** decode one voxel straight out of the arena
+  through views built once (`PayloadArena.blockAt`). That is a second hand-written reader
+  of the chunk block layout, so `store_test.ts` checks it against `read().get()` at every
+  index width.
+- **Hold the slot across a column.** A column crosses one chunk every 32 voxels, so
+  caching `slotOf` turns a hash probe per voxel into one per chunk, and a uniform chunk
+  (open air, deep rock) answers from its id without touching the arena. `raycast.ts` has
+  always done this. Clear the cache every frame, or a chunk that has streamed in, been
+  evicted or been regenerated is answered out of a stale slot.
+
+Together: 0.37 ms a step to 0.09 at a normal height, over the forest.
+
+### A probe that is shallower than the camera can climb goes blind
+
+`Follow.probeDepth` was 200 while `MAX_HEIGHT` was 400, so a flight raised past 200 voxels
+found no ground under it: the heading fan matched nothing and held its line, the height
+probe returned NaN, and `start()` fell back to the default height, dropping the camera
+hundreds of voxels the moment the flyover was switched on from altitude.
+
+Depth costs nothing where there *is* ground, because the scan stops at the first solid
+voxel; only the empty case pays for it. So the rule is to derive the depth from the range
+the camera can occupy rather than picking a number that looks generous.
+
+The same shape of bug: every smoothed term in a controller has to be reset when it
+restarts. `Follow.start()` reset the turn rate and the pitch and not the vertical rate,
+which had been added later, so switching the flyover off and on again started the next
+flight mid-climb. The test for it compares a restarted flight against a fresh one step for
+step, which is stronger than asserting it does not move: the first step may well turn and
+climb, it just must not inherit the last flight's rates.

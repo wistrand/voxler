@@ -47,15 +47,19 @@ chunk, so edits survive regeneration; placement, a voxel raycast plus an edit to
 undo and redo bound to the keyboard; and the field stage, where SDF and CSG brushes
 are folded into the world program in the voxelizer, in the SDF preview, and in the
 far-field brick builder.
-The far field is done: an eight-level brickmap clipmap with toroidal indirection and a
-shared brick pool, reaching 32,768 voxels, sampled from the world SDF on the GPU a slab
-at a time as the camera scrolls (brushes folded in, no chunks involved), reduced from
-chunk data in a worker for chunks an edit has changed and from the level below for the
-coarse levels, marched level by level in compute at half resolution behind a beam
-pre-pass, and composited behind the near field, which wins every pixel it drew (depth)
-and every chunk it is drawing (a coverage mask). The march costs 0.59 ms p50 at 1080p
-over the flyover bench. It is on by default (`?far=0` turns it off) and stays a plan
-file rather than an architecture doc for now. How far it reaches is fixed by default. A
+The far field is done: a brickmap clipmap with toroidal indirection and a shared brick
+pool, sampled from the world SDF on the GPU a slab at a time as the camera scrolls
+(brushes folded in, no chunks involved), reduced from chunk data in a worker for chunks
+an edit has changed and from the level below for the coarse levels, marched level by
+level in compute at full resolution behind a beam pre-pass, and composited behind the
+near field, which wins every pixel it drew (depth) and every chunk it is drawing (a
+coverage mask). The march costs 0.59 ms p50 at 1080p over the flyover bench. It is on by
+default (`?far=0` turns it off) and stays a plan file rather than an architecture doc for
+now. A world picks its own clipmap where the defaults do not suit it (`far` in
+`src/worlds/index.ts`), and the level count it gets is that trimmed to the distance its
+fog closes the view at, because a level past the fog horizon marches for a result the sky
+pass already drew. Blocks light the cells around them here too, gathered at the hit
+rather than baked, which is the near field's job done a different way. A
 controller that watches what the march and the brick sampling cost and moves the slab
 budget, the level count and the march resolution to fit the frame exists
 (`src/far/adapt.ts`, `?farAdapt=1`), but it is not the default: what it moves is visible
@@ -65,7 +69,11 @@ far field off turns shadows off with it.
 The living world is done: emissive blocks, wind in the vertex stage, the forest world
 program, block light flood filled in the mesh job and baked per quad corner, per-world
 sky and lighting presets (`src/render/sky.ts`) including a night with a moon, and
-shadows marched against the far field's clipmap.
+shadows marched against the far field's clipmap. The forest has grown since: four tree
+species over three leaf greens, mountains with a rock band and snow on top, waterfalls
+where a gorge and a steep step agree, and jellyfish in the water. What those cost to get
+right is in [plan-living-world.md](agent_docs/plan-living-world.md), and most of it was
+about scatter and rarity rather than about shapes.
 Main-thread cost per frame is flat in the resident chunk count; GPU cost follows
 what is drawn. Build the plans in this order. Each
 plan tracks its own phases; update the status column when a plan starts or lands.
@@ -119,7 +127,7 @@ today `src/gpu/`, `src/render/`, `src/camera/`, `src/util/`, `src/debug/`,
 | `src/far/`       | brick builder, clipmaps, far-field march and composite, shadow rays, the adaptive reach |
 | `src/workers/`   | `WorkerPool`, job queue, buffer pool, the worker, job handlers |
 | `src/util/`      | math, ring buffers, timers                                     |
-| `src/debug/`     | overlay (caps, stats, camera, errors) and frame `Stats`        |
+| `src/debug/`     | the debug overlay (caps, stats, camera, errors), the on-screen panel (frame rate, switches, compile progress) and frame `Stats` |
 | `src/bench/`     | benchmark scenes, runner, session                              |
 | `bench/results/` | dated benchmark result files (generated, committed)            |
 | `index.html`     | page shell, copied to `dist/` by the build                     |
@@ -215,7 +223,9 @@ F2 overlay (it starts hidden; an error or a bench run opens it),
 K follow flyover (`src/camera/follow.ts`: picks up whatever is under the camera and flies
 along it, which over a stream follows the stream; while it runs, +/- set its speed,
 Space/C raise and lower it, and dragging re-aims it, all through the same keys that fly
-the camera by hand),
+the camera by hand. It never passes under a surface or through anything: a corridor
+probe ahead of the flight lifts it over what is coming, and `speed` is speed through the
+air, so a climb is taken out of the forward step rather than added to it),
 P SDF preview, G grid, M meshes, F rebuild far-field bricks; editing: E place, Q remove, R rotate (Shift+R the
 other way), B block, X shape, Z undo, Y redo, aimed by the camera ray (overlay `edit`
 line).
@@ -251,7 +261,10 @@ near the camera that should be resident but weren't (0 means streaming kept up).
 
 - Never allocate in the per-frame path. Preallocate typed arrays, matrices, queues,
   descriptors, and bind groups. No array or object literals, closures, or spread per
-  frame. GC pauses show up as p99 spikes.
+  frame. GC pauses show up as p99 spikes. Reading voxels is the easy one to miss:
+  `ChunkStore.read()` builds five objects a call, so anything walking voxels goes through
+  `blockAt`/`blockAtSlot` and holds the slot across a column
+  ([gotchas.md](agent_docs/gotchas.md) "Reading one voxel through `ChunkStore.read()`").
 - Per-frame CPU work scales with changes (new meshes, edits, clipmap slabs), never
   with the number of resident chunks or clusters. Anything that touches every
   resident item each frame runs in compute.
@@ -283,9 +296,13 @@ near the camera that should be resident but weren't (0 means streaming kept up).
   ([gotchas.md](agent_docs/gotchas.md) "A shared arena block can be reused under a
   running worker").
 - Binary formats have one owner, [design-formats.md](agent_docs/design-formats.md).
-  Change an encoder and its decoder (worker and WGSL) in the same change. The brick and
-  clipmap layout has two WGSL readers, `src/far/far.wgsl` and `src/far/shadow.wgsl`;
-  a change to it is a change in both.
+  Change an encoder and its decoder (worker and WGSL) in the same change. A stride written
+  out by hand in a shader is not connected to its TypeScript constant by anything, and
+  missing one reader is silent, so each such format has a test that reads the shaders and
+  checks the arithmetic: `src/world/block-table_test.ts` for the block table's four
+  readers, `src/far/brick-layout_test.ts` for the brick and clipmap layout's three
+  (`far.wgsl`, `shadow.wgsl`, `far-build.wgsl`). Add the reader to the test in the same
+  change that adds the reader.
 - Baked per-corner values (AO, block light) join the mesher's merge key. Adding one
   fragments quads wherever it varies, which is a memory and draw cost, not just a
   shading one; measure the quad count, not only the frame time.
@@ -321,39 +338,65 @@ in [research-webgpu-support.md](agent_docs/research-webgpu-support.md).
 
 Measured on the dev machine (Intel Arc B390 iGPU, Chrome 152 on Linux) at 1920x1080 with
 everything on: near field, far field, textures, baked AO, block light, shadows,
-translucency. Dated 2026-09-12, results in `bench/results/*.20260912T183*`. Never compare
+translucency. Dated 2026-09-12, results in `bench/results/*.20260912T183*`, except the
+flyover, whose current numbers are `flyover.20260912T201507Z`. Never compare
 the vsync-capped `interval`; compare CPU frame time and the GPU passes. Rerun the four
 terrain scenes after any change that claims a frame-time effect, and `grove` as well for
-anything that touches the forest.
+anything that touches the forest. A run starts only once the world is there: every result
+carries `readyMs`, and one without that field predates the gate and its first run is
+suspect ([gotchas.md](agent_docs/gotchas.md) "A bench that starts before the world is
+built").
+
+**The table has been overtaken and only the forest has been re-measured.** It is the
+18:35 snapshot. Since then the far field marches at full resolution by default and carries
+block light, and the same terrain flyover re-run at 20:15
+(`flyover.20260912T201507Z` against `flyover.20260912T183537Z`) costs `gpu.far` 3.08 ms
+p50 against 0.79 and CPU frame 1.36 p50 against 0.71, and misses 46 frames of 1151 where
+the older run missed 2: the flyover no longer holds 120 Hz. `spin`, `cave` and `teleport`
+were not re-run and their rows are from before that change, and none of the four predates
+the readiness gate, so their first runs are suspect. The forest's own rows are current:
+the grove was re-measured on 2026-09-13 after the world gained mountains, a fourth tree
+species, falls and a different scatter and its spawn moved to 188
+(`grove.20260913T091555Z`). Re-run the four terrain scenes before quoting them.
 
 | Metric                                     | Target                                  | Measured                                        |
 | ------------------------------------------ | --------------------------------------- | ----------------------------------------------- |
-| Frame time, dev machine (Arc B390, 120 Hz) | under 8.3 ms (hold 120 Hz)              | held in the four terrain scenes (interval p99 8.34); the grove misses about 100 frames of 1400 |
-| GPU per frame, flyover                     | under 8.3 ms                            | 4.0 ms (sum of pass p50s); spin 4.5, cave 3.8, teleport 2.5 |
+| Frame time, dev machine (Arc B390, 120 Hz) | under 8.3 ms (hold 120 Hz)              | flyover misses 46 frames of 1151 since the far field went full resolution; spin, cave and teleport held it when last run (interval p99 8.34); the grove misses 12 of 1425 |
+| GPU per frame, flyover                     | under 8.3 ms                            | 6.3 ms (sum of pass p50s, 20:15 run; 4.0 before the full-resolution march); spin 4.5, cave 3.8, teleport 2.5, all from 18:35 |
 | Frame time, integrated GPU (M1, Iris Xe)   | under 16.7 ms                           | unmeasured, no hardware                         |
 | Frame time, discrete GPU                   | under 7 ms                              | unmeasured, no hardware                         |
 | Main-thread CPU per frame                  | under 2 ms, flat in resident chunks     | p50 0.34-1.69; p99 0.70-5.26, over in scenes that stream hard |
 | Near-field meshed radius                   | 16 chunks (512 voxels) horizontally     | as configured (`?streamRadius`)                 |
-| Far-field view distance                    | 32k voxels                              | 32,768 (8 clipmap levels); 21.7 MiB of bricks in terrain, 7.0 in the forest |
+| Far-field view distance                    | as far as the fog, no further           | levels are trimmed to the sky's fog reach per world (`levelsForReach`), so a world sets `far` and gets the levels it can see; 21.7 MiB of bricks in terrain, 7.0 in the forest |
 | Mesh throughput, surface chunk             | under 0.5 ms per chunk per worker       | 60-150 us without block light (plan-meshing phase 7) |
 | Mesh memory                                | 8 bytes per quad plus cluster padding   | 10.4% padding over the flyover                  |
 | Streaming                                  | no visible holes at sprint flight speed | `stream.holes` 0 in all five scenes             |
 
-Where the frame goes at 1080p, flyover p50: near-field opaque draw 1.90 ms (1.2 of that
-is shadow rays, measured), far-field march 0.79, far-field slab sampling 0.59,
-translucent cull 0.26, Hi-Z 0.13, everything else under 0.07. The empty-scene baseline is CPU 0.12 ms p50,
-GPU 0.25 (plan-foundation phase 6).
+Where the frame goes at 1080p, flyover p50 (`flyover.20260912T201507Z`): far-field march
+3.08 ms, near-field opaque draw 2.10 (about 1.2 of that is shadow rays, measured at 18:35),
+far-field slab sampling 0.59, translucent cull 0.26, beam pre-pass 0.13, everything else
+under 0.07. The march is the largest pass in the frame since it went full resolution;
+`?farScale=0.5` is the switch that buys it back, at the cost of distant contour lines
+breaking up. The empty-scene baseline is CPU 0.12 ms p50, GPU 0.25 (plan-foundation
+phase 6).
 
-Three things are over target, and each is recorded where it belongs rather than smoothed
+Four things are over target, and each is recorded where it belongs rather than smoothed
 away here:
 
-- **CPU frame p99**, 3.3 ms in the flyover and 5.3 in the teleport against a 2 ms target.
+- **The far-field march is 3.08 ms p50** in the flyover, near 40% of the frame's GPU time,
+  since it went to full resolution and picked up block light. What it bought is distant
+  terraces and contour lines that survive the distance; whether that trade holds on a
+  slower GPU is unmeasured.
+- **CPU frame p99**, 3.7 ms in the flyover and 5.3 in the teleport against a 2 ms target.
   That is the main thread applying mesh results and uploading them in bursts, not
-  steady-state work; p50 is 0.7 and 1.6.
-- **The grove bench no longer holds 120 Hz.** Its far-field slab sampling is 6-7 ms p50
-  in a world an order richer than terrain, and `?farSlabs=1` halves the p99 for a slower
-  catch-up. The earlier runs that did hold it were walking underground
-  ([gotchas.md](agent_docs/gotchas.md) "The grove bench walked 44 voxels underground").
+  steady-state work; p50 is 1.4 and 1.6.
+- **The grove bench's far-field build spikes.** 4.98 ms p50 and 19.2 p99 in a world an
+  order richer than terrain, which is what misses 12 frames of 1425
+  (`grove.20260913T091555Z`); `?farSlabs=1` trades the p99 for a slower catch-up. Two
+  earlier readings of this scene were wrong in opposite directions and both are recorded:
+  runs that walked underground ([gotchas.md](agent_docs/gotchas.md) "The grove bench
+  walked 44 voxels underground") and runs that started before the world was built
+  (same file, "A bench that starts before the world is built").
 - **Shadows cost about 1.2 ms** of the near-field draw at 1080p: flyover `gpu.near.a`
   0.72 ms p50 with `?shadow=0` and 1.90 without it
   (`flyover.20260912T184002Z` against `flyover.20260912T183537Z`). Whether that is worth
@@ -434,12 +477,17 @@ away here:
   world's fog horizon; the direction that is not automatic is the other one, a world whose
   reach is shorter than its fog, which cuts visibly and needs thicker air.
   A new block type is one entry in `BLOCKS` (`src/world/blocks.ts`); worlds see it as
-  `BLOCK_<NAME>`. A block that glows carries an `emission` colour, added to the lit
+  `BLOCK_<NAME>`; a name that is not an identifier becomes one (`leaves-dark` is
+  `BLOCK_LEAVES_DARK`). A block that glows carries an `emission` colour, added to the lit
   surface by the near field, the preview and the far field alike; keep it small enough
   that lit plus emission stays under 1, because nothing tonemaps and the block would
   clip to white. A block that lights its neighbours carries `light`, a level 0 to
   `LIGHT_MAX` that falls by one a voxel and is flood filled in the mesh job and baked
-  into the quads around it.
+  into the quads around it. A block that *moves* carries either `sway`, which the vertex
+  stage applies to its faces, or `flow`, which scrolls its texture down them instead:
+  sway is for a thing attached at one end, flow for a surface that is going somewhere,
+  and swaying a sheet of water pushes it into its neighbours and flickers
+  ([gotchas.md](agent_docs/gotchas.md) "Animate flowing water with the texture").
 - Whether a placed object exists, what kind it is and how big it is are properties of the
   *object*, so read the world at the object's own base, never at the point being shaded.
   A world function sees one point at a time; a test that varies across a tree's own

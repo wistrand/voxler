@@ -127,9 +127,9 @@ the camera is.
 
 - [x] Block types for the forest: bark, four glowing caps, mushroom stem, fern, moss
 - [x] `src/worlds/forest.wgsl`: terraced ground over hills and ridged mountains, lakes
-      in the valleys, a stream that cascades down it, three species of tree, mushrooms
+      in the valleys, a stream that cascades down it, four species of tree, mushrooms
       small and giant, ferns and boulders, all SDF composition under one
-      `WORLD_LIPSCHITZ` (5.0, raised from 4 when the mountains arrived)
+      `WORLD_LIPSCHITZ` (6.0, from 4 as the mountains and then the ranges arrived)
 - [x] A spawn in the wood, and the `grove` bench scene that walks under the canopy
 - [x] Nothing rooted grows below the waterline, decided at each plant's own base and
       faded over a band rather than cut at a line. Trees and giants want `TREE_DRY` of
@@ -203,6 +203,17 @@ went 5 to 6: the range term rides on a cube, which triples that noise's own slop
 crest. **Check the median as well as the peak, and check the preview for holes, after
 touching any of the amplitudes.**
 
+**A tree with no trunk is a tree floating over the ridge.** The conifer's trunk tapered
+to `trunk_r * 0.3`, under half a voxel at the thin end, so the top of it was not
+voxelized at all and the tiers of needles it carried came out as separate slabs in the
+air. Conifers take over as the ground climbs to the tree line, which is why what showed
+was a few floating trees on mountain ridges and nothing anywhere else
+([gotchas.md](gotchas.md) "A trunk that tapers under a voxel leaves its crown in the
+air"). Anchoring each plant at its own foot instead of draping it over the ground under
+the sample point was the other candidate; it was built, measured at three times the
+far-field build cost, and taken out (same gotchas file, "A plant draped over the terrain
+is cheap").
+
 **Four species and three greens.** Birch joined the broadleaf, conifer and ancient: a
 slender white trunk with the dark dashes, a bare length of it under a light airy crown,
 and it likes the low open ground where the conifers do not. The canopy has three leaf
@@ -223,15 +234,20 @@ CPU frame 0.40 p50. That run was underground; see below.
 **The grove bench was measuring solid rock.** Scene paths are offsets from the world's
 spawn, and the forest spawn stayed at y = 70 after the ground grew mountains and lakes
 under it. The floor near the origin is 94, so the walk ran 44 voxels inside the hill and
-every number it produced was for a frame with nothing in it. The spawn now stands at 120,
-over a canopy that tops out near 112, and the scene's -20 drops under it. The walk is
+every number it produced was for a frame with nothing in it. The spawn stands at 188 now
+(120 first, which the ranges then put underground again: the ground at the origin is 132),
+and the scene's -20 drops under it. The walk is
 slower (8 voxels a second, not 14) so it stays in one stretch of wood; the ground along it
 runs from 95 down to 71, which a fixed height cannot hug.
 
-On the real path the grove does not hold 120 Hz: `gpu.far.build` is 6.6 ms p50 and 24 p99,
-and 102 frames of about 1400 are missed (`grove.20260912T180812Z`). `?farSlabs=1` halves
-the p99 (10.5) for a slower catch-up. This is the first honest measurement of the scene
-rather than a regression against the underground one.
+Measured again on 2026-09-13 with the world built before the run starts
+([gotchas.md](gotchas.md) "A bench that starts before the world is built"), the grove
+nearly holds it: interval p50 and p99 both 8.34 with 12 frames of 1425 missed
+(`grove.20260913T091555Z`), against 74 of 1354 on the run before it while the clipmap was
+still filling in behind. `gpu.far.build` is 4.98 ms p50 and 19.2 p99, which is the spike
+that misses those frames; `?farSlabs=1` trades the p99 for a slower catch-up. The earlier
+figure of 102 frames of 1400 (`grove.20260912T180812Z`) was measured before that gate
+existed, and its first run was of a world that had not finished arriving.
 
 Everything is a pure function of position, so there is no placement pass and no
 per-instance data: the voxelizer, the preview and the far field see the same wood, and
@@ -280,8 +296,8 @@ is a pattern as much as a grid is, so mushrooms, ferns and boulders now clump th
 trees already did.
 
 **The far field is what a rich world costs.** Sampling this SDF is an order dearer than
-sampling terrain's noise, and the far field does it eight times over, once per clipmap
-level: `gpu.far.build` was 5.57 ms p50 in the grove with the vegetation surviving to a
+sampling terrain's noise, and the far field does it once per clipmap level, which was
+eight at the time: `gpu.far.build` was 5.57 ms p50 in the grove with the vegetation surviving to a
 16-voxel footprint. Cutting the undergrowth to the finest level and the trees to an
 8-voxel footprint brings it to 4.33 (interval max 83 ms to 42). The rest is inherent;
 `?farSlabs=1` halves the per-frame build for a slower catch-up.
@@ -402,11 +418,12 @@ What is there now, in `src/worlds/forest.wgsl`:
 The rule the forest paid for: **a broad continuous feature survives being drawn coarsely,
 a small bright one does not.**
 
-Both of the things this left open are now closed, in the far field rather than here: a
-distant glowcap lights the cells around it (`gathered_light()` in `src/far/far.wgsl`), and
-the swap at each footprint dissolves across a dithered band instead of popping at a level
-boundary. Both are in [plan-far-field.md](plan-far-field.md), "Block light" and
-"The boundary between two levels".
+One of the things this left open is closed, in the far field rather than here: a distant
+glowcap lights the cells around it (`gathered_light()` in `src/far/far.wgsl`,
+[plan-far-field.md](plan-far-field.md) "Block light"). The other, the ring where one level
+gives up the world for the next, is still open: dithering the band was tried and taken out
+because the two levels do not hold the same world and each shows through the other's gaps
+([plan-far-field.md](plan-far-field.md) "The boundary between two levels").
 
 ## Open questions
 
@@ -433,6 +450,8 @@ Still open:
   blue one light their surroundings the same. Three channels would need three fills and
   three times the quad bits; the forest does not need it and another world might.
 - **Whether the grove bench should follow the ground.** Scene poses are fixed offsets
-  from the spawn, and the forest's ground now runs from 95 down to 71 along the grove's
-  path, so no single height hugs it. A terrain-following pose would need the world SDF on
-  the CPU, which nothing else wants.
+  from the spawn, and the forest's ground runs up and down along the grove's path, so no
+  single height hugs it. `Follow` (`src/camera/follow.ts`, the K flyover) does follow the
+  ground, but by probing the chunk store, so what it flies over depends on what has
+  streamed in: a bench driven by it would measure a different path on a slower machine,
+  which is exactly what a bench must not do.

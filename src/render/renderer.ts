@@ -113,8 +113,15 @@ export class Renderer {
   readonly near: NearField;
   // Result of the draw builtins self-test: null before it ran, "ok", or failures.
   drawTest: string | null = null;
-  // Milliseconds each init stage took, for the overlay's startup line. Shader
-  // compilation for a heavy world dominates it.
+  // Milliseconds each init stage took, for the overlay's startup line and the on-screen
+  // panel's compiling note. Shader compilation for a heavy world dominates it, and what
+  // it costs is the size of the world program rather than anything the engine does:
+  // measured cold on the dev machine, the forest's two world modules take about 140 ms
+  // and the monument valley's about 1.4 s, and the two compile at the same time rather
+  // than one after the other, so the wait is the slower of them and not their sum. The
+  // 3x3 neighbourhood loops in a world are not what costs it: forcing the compiler not to
+  // unroll one moved the monument by nothing (gotchas.md "What a heavy world costs to
+  // compile").
   readonly startup: Record<string, number> = {};
   // Null when adaptation is off (`?farAdapt=0`, and during a bench run, where a reach
   // that moves under the measurement makes the numbers incomparable).

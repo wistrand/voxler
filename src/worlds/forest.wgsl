@@ -431,7 +431,11 @@ fn conifer_shape(local: vec3f, r: vec3f, r2: vec3f, tall: f32, leaf: f32) -> vec
       vec3f(0.0, tall * 0.5, 0.0),
       vec3f(0.0, tall * 1.02, 0.0),
       trunk_r * 1.9,
-      trunk_r * 0.3,
+      // Never thinner than a voxel. A taper that ends under half a voxel leaves no voxels
+      // at all up there, and the tiers it was carrying come out as three or four separate
+      // slabs of needles stacked in the air with nothing joining them
+      // (gotchas.md "A trunk that tapers under a voxel leaves its crown in the air").
+      max(trunk_r * 0.3, 0.75),
     ),
     f32(BLOCK_BARK),
   );
@@ -1125,3 +1129,4 @@ fn world_sdf(p: WorldPoint) -> f32 {
 fn world_material(p: WorldPoint) -> u32 {
   return u32(forest(p).y);
 }
+
