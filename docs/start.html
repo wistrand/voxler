@@ -1,0 +1,791 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Voxler: get started</title>
+<meta name="description" content="Write a WGSL world, get a running voxel renderer. The whole API on one page.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' fill='%23223'/%3E%3Cpath d='M8 2l5 3v6l-5 3-5-3V5z' fill='%236c8'/%3E%3Cpath d='M8 2l5 3-5 3-5-3z' fill='%239ea'/%3E%3Cpath d='M8 8v6l-5-3V5z' fill='%234a6'/%3E%3C/svg%3E">
+<style>
+  :root {
+    --bg: #0e1116; --panel: #161b22; --edge: #262d36;
+    --text: #d8e0e8; --dim: #9aa7b4; --accent: #7fd39b; --warn: #e8c07d;
+  }
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 16px/1.65 system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  main { max-width: 60rem; margin: 0 auto; padding: 0 1.25rem 5rem; }
+  a { color: var(--accent); }
+  h1 { font-size: 2.2rem; margin: 0 0 .3rem; letter-spacing: -.02em; }
+  h2 { font-size: 1.25rem; margin: 3rem 0 .75rem; letter-spacing: -.01em; }
+  h3 { font-size: 1rem; margin: 1.75rem 0 .4rem; }
+  p { margin: 0 0 1rem; }
+  header { padding: 3rem 0 1rem; }
+  .lead { font-size: 1.1rem; color: var(--dim); max-width: 44rem; }
+  .crumb { color: var(--dim); font-size: .9rem; margin-bottom: 1.5rem; }
+  pre {
+    background: var(--panel); border: 1px solid var(--edge); border-radius: 8px;
+    padding: .9rem 1.05rem; overflow-x: auto; margin: 0 0 1rem;
+    font: 13px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  code { font: .9em ui-monospace, SFMono-Regular, Menlo, monospace; }
+  p code, li code, td code { background: var(--panel); border-radius: 4px; padding: .1em .35em; }
+  .note {
+    background: var(--panel); border: 1px solid var(--edge); border-left: 3px solid var(--warn);
+    border-radius: 6px; padding: .9rem 1.1rem; color: var(--dim); margin: 0 0 1.25rem;
+  }
+  .note strong { color: var(--text); }
+  table { border-collapse: collapse; width: 100%; margin: 0 0 1.25rem; font-size: .95rem; }
+  th, td { text-align: left; padding: .45rem .7rem; border-bottom: 1px solid var(--edge); vertical-align: top; }
+  th { color: var(--dim); font-weight: 600; }
+  ul { padding-left: 1.15rem; }
+  li { margin-bottom: .35rem; }
+  .stage { position: relative; border: 1px solid var(--edge); border-radius: 8px; overflow: hidden; background: #000; }
+  .stage canvas { display: block; width: 100%; aspect-ratio: 16 / 9; touch-action: none; cursor: grab; }
+  .stage canvas:active { cursor: grabbing; }
+  .stage .status {
+    position: absolute; inset: 0; display: grid; place-items: center; padding: 1.5rem;
+    text-align: center; color: var(--dim); background: rgba(14, 17, 22, .82);
+    font: 14px/1.6 ui-monospace, monospace;
+  }
+  .stage .status[hidden] { display: none; }
+  .runbar { display: flex; gap: .6rem; align-items: center; margin: .6rem 0 1.25rem; flex-wrap: wrap; }
+  button {
+    padding: .45rem .9rem; border: 1px solid var(--edge); border-radius: 6px;
+    background: var(--panel); color: var(--text); font: inherit; cursor: pointer;
+  }
+  button:hover { border-color: var(--accent); }
+  .runbar .hint { color: var(--dim); font-size: .9rem; }
+  .edits {
+    border: 1px solid var(--edge); border-radius: 8px; padding: .8rem 1rem; margin: 0 0 1.5rem;
+    display: flex; flex-wrap: wrap; gap: .5rem 1.4rem; align-items: center;
+  }
+  .edits-label { flex-basis: 100%; color: var(--dim); font-size: .9rem; }
+  .edits label { display: flex; align-items: baseline; gap: .4rem; cursor: pointer; }
+  .edits input { cursor: pointer; }
+  .edits .dim { color: var(--dim); font-size: .85rem; }
+  .edits-note { flex-basis: 100%; margin: .2rem 0 0; color: var(--dim); font-size: .85rem; }
+  .edits[aria-disabled="true"] { opacity: .45; pointer-events: none; }
+  footer { color: var(--dim); font-size: .9rem; border-top: 1px solid var(--edge); padding-top: 1.5rem; margin-top: 3.5rem; }
+</style>
+</head>
+<body>
+<main>
+
+<header>
+  <div class="crumb"><a href="./">Voxler</a> / get started</div>
+  <h1>Write a world, get a renderer</h1>
+  <p class="lead">
+    A world in voxler is not a file of voxels. It is a WGSL program: a signed distance
+    function and a material function. You hand it to the engine and get streaming,
+    meshing, culling, a ray-marched horizon and shadows, without wiring any of them up.
+  </p>
+</header>
+
+<div class="note">
+  <p style="margin:0">
+    <strong>It needs WebGPU.</strong> Chrome or Edge on desktop, Safari 26 on macOS 26 or
+    iOS 26, or Firefox on Windows or Apple Silicon. There is no WebGL fallback.
+  </p>
+</div>
+
+<h2>Install</h2>
+
+<p>
+  Voxler is not on the npm registry. Install the tarball by its URL instead:
+</p>
+
+<pre><code>npm install https://wistrand.github.io/voxler/voxler-0.1.0.tgz</code></pre>
+
+<p>
+  Pin the version in the URL. npm caches a tarball by the URL it came from, so a filename
+  that moves is a dependency that moves under you.
+</p>
+
+<p>
+  Inside are <code>voxler.js</code>, with the WGSL already inlined, and
+  <code>workers/voxel.worker.js</code> beside it, where the default worker factory looks
+  for it. It ships as a bundle rather than as source so that your build never has to
+  understand <code>import ... with { type: "text" }</code>.
+</p>
+
+<div class="note">
+  <p style="margin:0">
+    <strong>No TypeScript declarations yet.</strong> Deno emits no <code>.d.ts</code> and
+    hand-writing one for a surface this size would drift from the code inside a week, so
+    for now a TypeScript caller gets <code>any</code> from the import. It is the open item
+    in
+    <a href="https://github.com/wistrand/voxler/blob/main/agent_docs/plan-packaging.md">plan-packaging.md</a>.
+  </p>
+</div>
+
+<p>
+  This page does not use the tarball: it imports <code>play/voxler.js</code> directly,
+  which is the same file the tarball is built from.
+</p>
+
+<h2>Try it</h2>
+
+<div class="stage">
+  <canvas id="view"></canvas>
+  <div class="status" id="status">pick a world</div>
+</div>
+
+<div class="runbar">
+  <button data-world="small">Hills</button>
+  <button data-world="big">Mountains, sea and boulders</button>
+  <button id="stop" hidden>Dispose</button>
+  <span class="hint">Drag to look, WASD to move, Space and C for up and down. The running
+    engine is <code>voxler</code> in the console.</span>
+</div>
+
+<div class="edits">
+  <span class="edits-label">Edits, applied to whichever world is running:</span>
+  <label><input type="checkbox" data-edit="pillar"> CSG pillar <span class="dim">smooth union, subtracted bore</span></label>
+  <label><input type="checkbox" data-edit="cave"> Carved hollow <span class="dim">a subtracted sphere in the ground</span></label>
+  <label><input type="checkbox" data-edit="waymark"> Waymark <span class="dim">a list of explicit voxels</span></label>
+  <p class="edits-note">
+    Each is one brush. They go in front of where you started; fly back if you have wandered
+    off. Unticking removes the brush and the terrain closes over it.
+  </p>
+</div>
+
+<h2>The whole thing</h2>
+
+<p>
+  That is the whole of it. Three lines, and the rest of this page is optional.
+</p>
+
+<pre><code>import { Voxler } from "voxler";
+
+const voxler = await Voxler.create(canvas, { world: { code: myWorldWgsl } });
+voxler.start();</code></pre>
+
+<h2>A world that runs</h2>
+
+<p>
+  This is the complete source of <strong>Hills</strong> above: four octaves of noise, sand
+  in the hollows, snow on the tops. The page reads it out of this block and compiles it, so
+  what you see here is what ran.
+</p>
+
+<pre><code id="world-src">// Bound on the gradient of world_sdf. Overestimating is safe and slow; under-
+// estimating deletes terrain, so start high and tighten it later.
+const WORLD_LIPSCHITZ: f32 = 2.0;
+
+fn height(p: WorldPoint) -&gt; f32 {
+  // fbm2(point, k0, octaves, gain): k0 is a power-of-two wavelength, so 9 is 512
+  // voxels. Sampled through the point's lattice, so it does not band at distance.
+  return 60.0 + fbm2(p, 9u, 4u, 0.5) * 30.0;
+}
+
+fn world_sdf(p: WorldPoint) -&gt; f32 {
+  return f32(p.cell.y) + p.frac.y - height(p);
+}
+
+fn world_material(p: WorldPoint) -&gt; u32 {
+  let y = f32(p.cell.y) + p.frac.y;
+  if (y &gt; 74.0) { return BLOCK_SNOW; }
+  if (y &lt; 52.0) { return BLOCK_SAND; }
+  return BLOCK_GRASS;
+}</code></pre>
+
+<p>
+  No data was downloaded to draw that. The terrain is evaluated on the GPU from the source
+  above: full resolution near the camera, coarser cells out to the fog.
+</p>
+
+<h2>Something with more in it</h2>
+
+<p>
+  <strong>Mountains, sea and boulders</strong>, the second button. The same three
+  functions, with a mask over the mountains and a scatter of rocks. Read the scatter.
+  Placing objects on a lattice is where worlds usually go wrong.
+</p>
+
+<pre><code id="world-src-2">const WORLD_LIPSCHITZ: f32 = 2.0;
+
+const SEA_LEVEL = 46.0;
+const SNOW_LINE = 88.0;
+// One lattice cell per 48 voxels, three tries in each, and a boulder small enough that it
+// plus its jitter stays inside one cell. That last part is what keeps a 3x3 neighbourhood
+// enough to find every boulder that could reach this sample.
+const ROCK_CELL = vec3i(48, 0, 48);
+const ROCK_TRIES = 3u;
+const ROCK_MAX = 5.0;
+
+fn height(p: WorldPoint) -&gt; f32 {
+  let hills = fbm2(p, 9u, 4u, 0.5) * 26.0;
+  // Mountains only where a second, slower field says so, or they cover everything.
+  let mask = smoothstep(0.15, 0.65, fbm2(p, 11u, 2u, 0.5) * 0.5 + 0.5);
+  return 58.0 + hills + ridged2(p, 9u, 3u, 0.5) * 42.0 * mask;
+}
+
+// A stable random per lattice cell. `world_seed` is set for you before your code runs.
+fn cell_random(id: vec3i, salt: u32) -&gt; vec3f {
+  return vec3f(hash3(id + vec3i(i32(salt) * 7919, 0, 0), world_seed)) * (1.0 / 4294967296.0);
+}
+
+fn boulders(p: WorldPoint, ground: f32) -&gt; f32 {
+  var best = 1e9;
+  // A boulder is narrower than a far-field cell out there, and something narrower than the
+  // cell can only be drawn inflated to it. Leave it out instead.
+  if (sample_footprint &gt; ROCK_MAX) { return best; }
+  let y = f32(p.cell.y) + p.frac.y;
+  for (var i = -1; i &lt;= 1; i++) {
+    for (var j = -1; j &lt;= 1; j++) {
+      let shift = vec3i(i * ROCK_CELL.x, 0, j * ROCK_CELL.z);
+      let q = wp_offset(p, -vec3f(shift));
+      let id = wp_repeat_id(q, ROCK_CELL);
+      // Several tries per cell, not one. One per cell is a stratified sample however far
+      // you jitter it: never two boulders close together, never a gap wider than a cell.
+      for (var k = 0u; k &lt; ROCK_TRIES; k++) {
+        let r = cell_random(id, 40u + k * 3u);
+        if (r.x &gt; 0.22) { continue; }
+        // wp_repeat_near, never wp_repeat: the loop offsets the point by whole periods,
+        // and a periodic function hands back the same number for every one of them.
+        var local = wp_repeat_near(q, ROCK_CELL, shift);
+        // The jitter covers the whole cell. Half a cell leaves a band down every boundary
+        // that nothing can ever stand in.
+        let jit = cell_random(id, 41u + k * 3u);
+        local.x -= (jit.x - 0.5) * f32(ROCK_CELL.x);
+        local.z -= (jit.z - 0.5) * f32(ROCK_CELL.z);
+        local.y = y - ground;
+        let radius = 2.0 + r.y * (ROCK_MAX - 2.0);
+        best = min(best, sd_sphere(local - vec3f(0.0, radius * 0.45, 0.0), radius));
+      }
+    }
+  }
+  return best;
+}
+
+fn world_sdf(p: WorldPoint) -&gt; f32 {
+  let y = f32(p.cell.y) + p.frac.y;
+  let h = height(p);
+  // Water fills what is below the sea and above the ground, so it meets the shore instead
+  // of running through it. Both halves are 1-Lipschitz, so the bound is unchanged.
+  let sea = max(y - SEA_LEVEL, h - y);
+  return min(min(y - h, sea), boulders(p, h));
+}
+
+fn world_material(p: WorldPoint) -&gt; u32 {
+  let y = f32(p.cell.y) + p.frac.y;
+  let h = height(p);
+  if (boulders(p, h) &lt; 0.0) { return BLOCK_STONE; }
+  if (y &gt; h) { return BLOCK_WATER; }
+  if (y &gt; SNOW_LINE) { return BLOCK_SNOW; }
+  if (y &lt; SEA_LEVEL + 2.0) { return BLOCK_SAND; }
+  return BLOCK_GRASS;
+}</code></pre>
+
+<p>
+  The comments in the scatter are rules, not preferences. Skip one and the lattice shows
+  through: nine boulders stacked on one cell, or an even spread that reads as a grid from
+  the air.
+</p>
+
+<h2>What a world has to define</h2>
+
+<p>
+  Three things, in WGSL. Your code is concatenated after the generated block constants and
+  the SDF library, so <code>BLOCK_GRASS</code>, <code>fbm2</code> and
+  <code>WorldPoint</code> are all in scope.
+</p>
+
+<table>
+  <tr><th>Name</th><th>What it is</th></tr>
+  <tr>
+    <td><code>WORLD_LIPSCHITZ: f32</code></td>
+    <td>A bound on the gradient of <code>world_sdf</code>, at least 1. The engine skips
+      whole regions when the distance is larger than this times their half diagonal, so an
+      underestimate silently deletes terrain. Overestimating only costs speed.</td>
+  </tr>
+  <tr>
+    <td><code>world_sdf(p) -&gt; f32</code></td>
+    <td>Signed distance in voxels, negative inside. It may underestimate the true
+      distance; it must never overestimate it.</td>
+  </tr>
+  <tr>
+    <td><code>world_material(p) -&gt; u32</code></td>
+    <td>A block id. Only called where the field says solid, so it never has to decide
+      whether something is there.</td>
+  </tr>
+</table>
+
+<p>
+  <code>p</code> is a <code>WorldPoint</code>: an integer voxel coordinate plus a
+  fraction. That split is what keeps the world exact far from the origin, where a
+  <code>f32</code> position would have lost the low bits. To compute with it, use
+  <code>wp_f32(p)</code>, <code>wp_local(p, anchor)</code> or
+  <code>wp_repeat_near(p, period)</code>.
+</p>
+
+<p>
+  Two rules that are not obvious, and each cost an afternoon here:
+</p>
+
+<ul>
+  <li>Generation takes only the world, the seed and the position. No time, no camera. A
+    chunk is evaluated once and a brick sampled once, so anything else is not reproducible.</li>
+  <li>Whether an object exists is decided at that object's base, not at the point being
+    shaded. Decide it per sample and a tree is in the field for some of its own voxels and
+    not others. It looks cut in half along a contour.</li>
+</ul>
+
+<h2>Options</h2>
+
+<p>
+  Only the world is required. Every other default is what the demo on the front page
+  runs.
+</p>
+
+<pre><code>await Voxler.create(canvas, {
+  world:  { code, spawn: [0, 100, 0], start, sky: "night", birds: true },
+  seed:   1,
+  camera: { at: [0, 100, 0], yaw: 0, pitch: -0.25 },
+
+  stream: { radius: 16, height: 6, arenaBytes: 128 &lt;&lt; 20 },  // or false
+  mesh:   { ao: true, blockLight: true, clusterQuads: 32 },   // or false
+  far:    { size: 32, firstLevel: 1, shadows: true },         // or false
+  render: { size: "auto", textures: true, glow: true, wind: true },
+
+  workers:  { count: 8, factory: (i) =&gt; new Worker(myWorkerUrl, { type: "module" }) },
+  controls: true,
+  onError:  (message) =&gt; console.warn(message),
+});</code></pre>
+
+<table>
+  <tr><th>Option</th><th>Note</th></tr>
+  <tr><td><code>stream: false</code></td><td>No chunks, so no meshes either. The far field still draws.</td></tr>
+  <tr><td><code>far: false</code></td><td>Takes the shadows with it: shadow rays march the far field's clipmap, so there is nothing to march without it.</td></tr>
+  <tr><td><code>render.size</code></td><td>A fixed render size is letterboxed into the element at its own aspect rather than stretched, so the pixels stay square.</td></tr>
+  <tr><td><code>workers.factory</code></td><td>The default resolves the worker next to the engine bundle. Pass your own if your bundler does not follow <code>new URL(..., import.meta.url)</code>.</td></tr>
+  <tr><td><code>controls: false</code></td><td>No input listeners at all. Drive <code>voxler.camera</code> yourself.</td></tr>
+  <tr><td><code>render.gizmo</code></td><td>The debug axis cross in the corner. On by default because the demo wants it; the frame above passes <code>false</code>.</td></tr>
+</table>
+
+<h2>Driving it</h2>
+
+<pre><code>voxler.start();          // owns requestAnimationFrame
+voxler.stop();
+voxler.frame(now);       // or drive it from a loop of your own
+voxler.resize(w, h);
+voxler.dispose();        // workers terminated, device destroyed, listeners removed
+
+voxler.camera            // FlyCamera: setPosition, setOrientation, worldPosition
+voxler.renderer          // null until ready, and again across a device loss
+voxler.store             // the resident chunks
+voxler.stats             // frame interval, CPU sections, GPU passes
+voxler.edit.fillSphere(x, y, z, r, id);</code></pre>
+
+<p>
+  <code>renderer</code> is nullable on purpose. A lost GPU device throws away every GPU
+  object, and the engine builds a replacement with the camera where it was. Read it through
+  the instance each time, or take the new one from <code>onReady</code>. Do not cache it.
+</p>
+
+<h2>Changing a world after it is running</h2>
+
+<p>
+  The world function is fixed once the page is running. Edits go in beside it, in two
+  forms that behave differently.
+</p>
+
+<h3>Field brushes: a shape folded into the SDF</h3>
+
+<p>
+  A CSG brush is a bounded primitive that joins the world's own field, on the GPU, before
+  anything is voxelized. It is not a decal on the surface: the field genuinely changes, so
+  the shape appears in the meshed near field, in the ray-marched far field and in the
+  ray-traced preview alike, and terrain closes around it.
+</p>
+
+<pre><code>import { BLEND_SUBTRACT } from "voxler";
+
+// A sphere of stone.
+const id = voxler.edit.csgSphere(120, 64, -40, 12);
+
+// A sphere of nothing: a cave mouth carved out of the hillside.
+voxler.edit.csgSphere(120, 58, -40, 9, 0, BLEND_SUBTRACT);
+
+voxler.brushes.remove(id);   // and it closes up again</code></pre>
+
+<p>
+  Seven primitives: sphere, box, rounded box, torus, capsule, cylinder and ellipsoid. A
+  brush folds into the world with <code>BLEND_UNION</code>, <code>BLEND_SUBTRACT</code> or
+  <code>BLEND_SMIN</code>, and only those three. Intersect and smooth-max are refused here
+  because they reach outside the brush's bound. Use them inside a CSG op list.
+</p>
+
+<p>
+  The bound matters in the other direction too. The engine skips a region when the
+  distance says nothing can be in it. So outside its own box a brush returns the distance
+  to that box, never a large constant. Return a large constant and the brush disappears.
+</p>
+
+<h3>Voxel edits: a journal replayed over the field</h3>
+
+<p>
+  The other kind writes block ids directly. That is what a placement tool wants, and what
+  a field brush cannot express: one voxel of one type, in a chunk that otherwise came
+  straight out of the terrain function.
+</p>
+
+<pre><code>voxler.edit.setVoxel(x, y, z, 3);
+voxler.edit.fillBox(x0, y0, z0, x1, y1, z1, 0);   // 0 is air
+voxler.edit.fillSphere(x, y, z, 6, 1);</code></pre>
+
+<h3>One brush, several primitives, a blend each</h3>
+
+<p>
+  <code>csgSphere</code> is the shortcut for one primitive. The general form is an op
+  list. A brush holds a sequence of primitives, each folding into the one before it with
+  its own blend, and the result folds into the world as one bounded instance. This is the
+  only place <code>BLEND_INTERSECT</code> and <code>BLEND_SMAX</code> can be used.
+</p>
+
+<pre><code>import { BLEND_SMIN, BLEND_SUBTRACT, BRUSH_CSG, packCsg,
+         PRIM_BOX, PRIM_CYLINDER, PRIM_SPHERE, BLOCKS } from "voxler";
+
+const block = (name) =&gt; BLOCKS.find((b) =&gt; b.name === name).id;
+
+// A pillar with a domed top and a bore down the middle. Coordinates in the op list are
+// relative to `cell`, so the whole thing moves by moving one number.
+const pillar = voxler.brushes.add({
+  kind: BRUSH_CSG,
+  cell: [120, 70, -40],
+  material: block("stone"),
+  ops: packCsg([
+    // Half extents. First op has nothing to blend with, so its blend is ignored.
+    { prim: PRIM_BOX, params: [6, 20, 6] },
+    // Smooth union, k = 5: the dome melts into the shaft instead of sitting on it.
+    { prim: PRIM_SPHERE, center: [0, 20, 0], params: [8], blend: BLEND_SMIN, k: 5 },
+    // Half height, radius. Subtracted, so it is the hole and not the drill.
+    { prim: PRIM_CYLINDER, params: [26, 2.5], blend: BLEND_SUBTRACT },
+  ]),
+});
+
+// The instance's own blend is how the finished shape meets the terrain, and there it is
+// union, subtract or smooth union only.
+voxler.brushes.move(pillar, 120, 66, -40);
+voxler.brushes.remove(pillar);</code></pre>
+
+<p>
+  Every primitive takes its own parameters: sphere a radius, box three half extents,
+  cylinder a half height and a radius, torus two radii, capsule seven numbers, ellipsoid
+  three. <code>packCsg</code> throws if the count is wrong rather than reading past the
+  end of the list.
+</p>
+
+<h3>A list of explicit voxels</h3>
+
+<p>
+  The voxel side takes a list too, and it is the one to reach for when what you want is
+  particular blocks in particular places rather than a shape. The ops run in order, so a
+  later one writes over an earlier one.
+</p>
+
+<pre><code>import { BRUSH_VOXEL, packVoxel, SHAPE_BOX, SHAPE_SPHERE, SHAPE_VOXEL,
+         VOXEL_CARVE, VOXEL_REPLACE, VOXEL_SET, BLOCKS } from "voxler";
+
+const block = (name) =&gt; BLOCKS.find((b) =&gt; b.name === name).id;
+
+// A waymark: a post, a glowing cap on it, moss at its foot, and the air above cleared.
+const marker = voxler.brushes.add({
+  kind: BRUSH_VOXEL,
+  cell: [64, 80, 64],
+  ops: packVoxel([
+    // SHAPE_BOX takes two inclusive corners, relative to `cell`.
+    { mode: VOXEL_SET, shape: SHAPE_BOX, id: block("wood"), params: [0, 0, 0, 0, 5, 0] },
+    // SHAPE_VOXEL takes one position: a single voxel, six up.
+    { mode: VOXEL_SET, shape: SHAPE_VOXEL, id: block("glowcap"), params: [0, 6, 0] },
+    // REPLACE writes only where the voxel already matches, so the moss follows the
+    // ground instead of hanging in the air over a dip.
+    { mode: VOXEL_REPLACE, shape: SHAPE_BOX, id: block("moss"), match: block("grass"),
+      params: [-2, -1, -2, 2, -1, 2] },
+    // SHAPE_SPHERE takes a centre and a radius. CARVE writes air whatever is there, so
+    // keep it clear of the cap at 6: ops run in order and this one would eat it.
+    { mode: VOXEL_CARVE, shape: SHAPE_SPHERE, params: [0, 12, 0, 3] },
+  ]),
+});</code></pre>
+
+<p>
+  Four modes: <code>VOXEL_SET</code> writes the id, <code>VOXEL_CARVE</code> writes air,
+  <code>VOXEL_REPLACE</code> writes only where the voxel is <code>match</code>, and
+  <code>VOXEL_PAINT</code> writes only where it is not air. The last two are what keep a
+  decoration from filling a hollow it was never meant to reach into.
+</p>
+
+<p>
+  Either list is one brush and one journal entry, so it survives regeneration as a unit
+  and undoes as a unit. A hundred separate <code>setVoxel</code> calls also work, and give
+  you a hundred entries to replay instead of one.
+</p>
+
+<h3>Why an edit survives its chunk being thrown away</h3>
+
+<p>
+  Chunks are not permanent. Streaming evicts them, a brush change regenerates them, and a
+  regenerated chunk is built from the world function again, which knows nothing about what
+  anyone typed. Edits survive that because a chunk is evaluated in two stages, always in
+  this order:
+</p>
+
+<ol>
+  <li>The <strong>field stage</strong>: the terrain SDF with the field brushes folded in,
+    on the GPU.</li>
+  <li>The <strong>voxel stage</strong>: the journal of voxel edits, replayed on the CPU
+    over the result.</li>
+</ol>
+
+<p>
+  Regenerating a chunk is stage one followed by a replay of stage two, so an edit made an
+  hour ago is reapplied to a chunk voxelized a second ago. The journal is indexed by chunk,
+  so a replay costs the entries whose bounds overlap that chunk and nothing else.
+</p>
+
+<div class="note">
+  <p style="margin:0">
+    <strong>Surviving regeneration is not surviving a reload.</strong> The journal and the
+    brush records live in memory for the session; nothing is written to disk or to
+    <code>localStorage</code>, and the engine will not do it for you. What it gives you is
+    the state to save: <code>voxler.brushes.records</code> and
+    <code>voxler.brushes.ops</code> are plain word buffers, and replaying
+    <code>brushes.add()</code> on the next load rebuilds the world you left. Persisting
+    that is the host's job, and it is an honest gap rather than a feature.
+  </p>
+</div>
+
+<p>
+  There is also an edit tool with undo and redo over the same journal
+  (<code>voxler.tool</code>), which is what the demo binds to its keys.
+</p>
+
+<h2>When the parts are what you want</h2>
+
+<p>
+  The class assembles parts that are all exported on their own. Drive them directly if you
+  have a frame loop, a camera or a scheduler already.
+</p>
+
+<pre><code>import { Renderer, ChunkStore, ChunkStreamer, MeshScheduler, WorkerPool, FlyCamera } from "voxler";</code></pre>
+
+<footer>
+  <p><a href="./">Back to the front page</a> &middot; <a href="play/?world=forest">Open the forest</a> &middot; <a href="https://github.com/wistrand/voxler">Source</a></p>
+</footer>
+
+</main>
+
+<script type="module">
+  // The page runs the code it shows: each world is read out of its own <code> block, so
+  // the source above and the source that compiles cannot drift apart. The edits below are
+  // the brush API from further down the page, applied to whichever world is running.
+  const status = document.getElementById("status");
+  const stopButton = document.getElementById("stop");
+  const canvas = document.getElementById("view");
+  const runButtons = [...document.querySelectorAll("button[data-world]")];
+  const editPanel = document.querySelector(".edits");
+  const editBoxes = [...document.querySelectorAll("input[data-edit]")];
+
+  // Spawns are above the surface of each world: the small one tops out near 90, the
+  // bigger one near 130 where the mountains are.
+  const WORLDS = {
+    small: { source: "world-src", spawn: [0, 110, 0] },
+    big: { source: "world-src-2", spawn: [0, 150, 0] },
+  };
+
+  let voxler = null;
+  let api = null; // the module, loaded once
+  let anchor = null; // where the edits go in the world currently running
+  const applied = new Map(); // edit name -> brush ids
+
+  function show(text) {
+    status.textContent = text;
+    status.hidden = text === "";
+  }
+
+  function busy(on) {
+    for (const b of runButtons) b.disabled = on;
+  }
+
+  function editsEnabled(on) {
+    editPanel.setAttribute("aria-disabled", String(!on));
+  }
+
+  const CHUNK = 32;
+
+  // A voxel's block id, or null when its chunk is not resident yet.
+  function blockAt(v, x, y, z) {
+    const cx = Math.floor(x / CHUNK), cy = Math.floor(y / CHUNK), cz = Math.floor(z / CHUNK);
+    const index = ((y - cy * CHUNK) * CHUNK + (z - cz * CHUNK)) * CHUNK + (x - cx * CHUNK);
+    try {
+      return v.store.blockAt(cx, cy, cz, index);
+    } catch {
+      return null;
+    }
+  }
+
+  // The surface under a column, so a brush sits on the ground rather than in the air. The
+  // worlds here differ by fifty voxels in height, so this cannot be a constant.
+  //
+  // A chunk that is still arriving can read as solid, which once put the whole set of
+  // edits sixty voxels up in the sky. So a surface only counts with air directly above it,
+  // and the answer has to come back the same twice a second apart before it is used.
+  function groundUnder(v, x, z, from) {
+    for (let y = from; y > from - 220; y--) {
+      const here = blockAt(v, x, y, z);
+      if (here === null || here === 0) continue;
+      const above = blockAt(v, x, y + 1, z);
+      if (above === 0) return y;
+    }
+    return null;
+  }
+
+  // In front of where the camera started, which is looking along -Z.
+  async function findAnchor(v) {
+    const x = Math.round(v.camera.worldPosition(0));
+    const z = Math.round(v.camera.worldPosition(2)) - 44;
+    const top = Math.round(v.camera.worldPosition(1)) + 20;
+    let last = null;
+    for (let tries = 0; tries < 40; tries++) {
+      const y = groundUnder(v, x, z, top);
+      if (y !== null && y === last) return [x, y, z];
+      last = y;
+      await new Promise((r) => setTimeout(r, 500));
+    }
+    return last === null ? null : [x, last, z];
+  }
+
+  const block = (name) => api.BLOCKS.find((b) => b.name === name).id;
+
+  // One entry per checkbox. Each returns the brush ids it added, so unticking can take
+  // exactly those back out.
+  const EDITS = {
+    pillar: (v, [x, y, z]) => [
+      v.brushes.add({
+        kind: api.BRUSH_CSG,
+        cell: [x, y + 14, z],
+        material: block("stone"),
+        ops: api.packCsg([
+          { prim: api.PRIM_BOX, params: [6, 20, 6] },
+          { prim: api.PRIM_SPHERE, center: [0, 20, 0], params: [8], blend: api.BLEND_SMIN, k: 5 },
+          { prim: api.PRIM_CYLINDER, params: [26, 2.5], blend: api.BLEND_SUBTRACT },
+        ]),
+      }),
+    ],
+    cave: (v, [x, y, z]) => [
+      v.brushes.add({
+        kind: api.BRUSH_CSG,
+        cell: [x + 26, y - 4, z],
+        blend: api.BLEND_SUBTRACT,
+        ops: api.packCsg([{ prim: api.PRIM_SPHERE, params: [11] }]),
+      }),
+    ],
+    waymark: (v, [x, y, z]) => [
+      v.brushes.add({
+        kind: api.BRUSH_VOXEL,
+        cell: [x - 22, y + 1, z],
+        ops: api.packVoxel([
+          { mode: api.VOXEL_SET, shape: api.SHAPE_BOX, id: block("wood"), params: [0, 0, 0, 0, 5, 0] },
+          { mode: api.VOXEL_SET, shape: api.SHAPE_VOXEL, id: block("glowcap"), params: [0, 6, 0] },
+          {
+            mode: api.VOXEL_REPLACE,
+            shape: api.SHAPE_BOX,
+            id: block("moss"),
+            match: block("grass"),
+            params: [-2, -1, -2, 2, -1, 2],
+          },
+          { mode: api.VOXEL_CARVE, shape: api.SHAPE_SPHERE, params: [0, 12, 0, 3] },
+        ]),
+      }),
+    ],
+  };
+
+  function applyEdit(name) {
+    if (!voxler || !api || !anchor || applied.has(name)) return;
+    applied.set(name, EDITS[name](voxler, anchor));
+  }
+
+  function removeEdit(name) {
+    const ids = applied.get(name);
+    if (!ids || !voxler) return;
+    for (const id of ids) if (voxler.brushes.has(id)) voxler.brushes.remove(id);
+    applied.delete(name);
+  }
+
+  for (const box of editBoxes) {
+    box.addEventListener("change", () => (box.checked ? applyEdit(box.dataset.edit) : removeEdit(box.dataset.edit)));
+  }
+
+  async function run(which) {
+    const spec = WORLDS[which];
+    if (!spec) return;
+    busy(true);
+    editsEnabled(false);
+    applied.clear(); // the brushes went with the engine that held them
+    anchor = null;
+    if (voxler) {
+      voxler.dispose();
+      voxler = null;
+      stopButton.hidden = true;
+    }
+    show("loading the engine");
+    try {
+      api ??= await import("./play/voxler.js");
+      show("compiling shaders, a few seconds on a first load");
+      voxler = await api.Voxler.create(canvas, {
+        world: { code: document.getElementById(spec.source).textContent, spawn: spec.spawn },
+        // A page is not a full-screen demo: a shorter reach and fewer workers leave the
+        // rest of the tab responsive, and the debug axis cross is not something an
+        // embedded viewer wants in the corner.
+        stream: { radius: 10, height: 4, arenaBytes: 48 << 20 },
+        workers: { count: 4 },
+        render: { gizmo: false },
+      }, {
+        onCompiling: (left) => show(left.length ? `compiling ${left.join(" ")}` : ""),
+        onUnsupported: (message) => show(message),
+        onError: (message) => console.warn("[voxler]", message),
+      });
+      voxler.start();
+      // Reachable from the console, so everything further down this page can be tried on
+      // the world above without writing a page of your own.
+      globalThis.voxler = voxler;
+      stopButton.hidden = false;
+      canvas.scrollIntoView({ block: "center", behavior: "smooth" });
+      // The ground has to be there before anything can be stood on it.
+      anchor = await findAnchor(voxler);
+      if (anchor === null) {
+        show("the ground never settled; reload and try again");
+      } else {
+        editsEnabled(true);
+        for (const box of editBoxes) if (box.checked) applyEdit(box.dataset.edit);
+      }
+    } catch (err) {
+      show(String(err && err.message ? err.message : err));
+    }
+    busy(false);
+  }
+
+  for (const button of runButtons) {
+    button.addEventListener("click", () => run(button.dataset.world));
+  }
+
+  stopButton.addEventListener("click", () => {
+    if (!voxler) return;
+    voxler.dispose();
+    voxler = null;
+    globalThis.voxler = null;
+    applied.clear();
+    anchor = null;
+    stopButton.hidden = true;
+    editsEnabled(false);
+    show("disposed: workers terminated and the device destroyed. Pick a world to build another.");
+  });
+
+  editsEnabled(false);
+</script>
+</body>
+</html>

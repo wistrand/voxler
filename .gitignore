@@ -1,4 +1,7 @@
 dist/
+# The npm tarball and its staging directory: built by `deno task pack`, published by CI
+# next to the site, never committed.
+dist-npm/
 .certs/
 .claude/
 node_modules/

@@ -1143,3 +1143,35 @@ switch that removes one draw.
 **Increment the counter next to the draw it counts.** A tally collected somewhere
 convenient is correct exactly until one of the things it tallies becomes optional, and the
 overlay is where a wrong count is least likely to be questioned.
+
+### A missing callback rendered a world with no chunks in it, and it looked fine
+
+Extracting `Voxler` from `main.ts` left four callbacks behind: `pool.on("chunk.compress")`,
+the `MESH_JOB` handlers, `streamer.listener`, and `streamer.voxelStage`. The first is the
+one that matters: without it a compressed chunk never reaches the `ChunkStore`, so the
+store stayed empty, nothing was ever meshed, and the near field had nothing to draw.
+
+What makes this worth writing down is that the page looked right. The far field samples the
+world function straight into its clipmap and needs no chunks at all, so it drew the terrain
+on its own: a complete-looking world, from the right function, at the right place, with the
+horizon and the fog where they should be. The screenshots taken of it went into the
+documentation. What was missing was only the near field, and without a side-by-side you do
+not notice the absence of ambient occlusion and per-voxel grain in a landscape you have
+never seen with it.
+
+It surfaced sideways. A brush placed through the new API did nothing, because a field brush
+reaches the world through the voxelizer and the voxelizer's output was going nowhere; a
+voxel brush did nothing because `voxelStage` was the journal replay. Chasing the brush
+found the chunk store empty.
+
+**Where the near field is concerned, "it draws" is not the check.** `mesher.stats.meshes`
+and `near.refreshStats().clusters` are, and both being zero while the frame looks populated
+is the exact signature of this. `refreshStats()` has to be called first: `near.stats` holds
+whatever it held last time, so reading it directly reports zeros that mean nothing.
+
+**A callback chain has no type error to give you.** The store does not know about meshing,
+the mesher does not know about the renderer, and the renderer is replaced wholesale on
+device loss, so every link is a field assignment that compiles whether or not anyone makes
+it. Two compositions of the same engine is the condition that allows one of them to be
+missing a link, which is the argument for `main.ts` using `Voxler` rather than paralleling
+it (plan-packaging.md phase 1).

@@ -4,16 +4,26 @@
     "build": "deno run --allow-read --allow-write=dist --allow-env --allow-run build.ts",
     "serve": "deno run --allow-read=dist,.certs --allow-env=PORT,HOST,TLS_CERT,TLS_KEY --allow-net serve.ts",
     "docs": "deno task build && deno run --allow-read=docs,dist --allow-env=PORT,HOST,BASE --allow-net docs-serve.ts",
-    "check": "deno check src/ build.ts serve.ts docs-serve.ts",
-    "test": "deno test --permit-no-files --allow-read=src src/",
-    "bench": "deno bench --permit-no-files src/"
+    "check": "deno check src/ build.ts serve.ts docs-serve.ts pack.ts",
+    "test": "deno test --permit-no-files --allow-read=src,docs src/",
+    "bench": "deno bench --permit-no-files src/",
+    "pack": "deno run --allow-read --allow-write=dist,dist-npm --allow-env --allow-run pack.ts"
   },
   "imports": {
     "esbuild": "npm:esbuild@0.25.12"
   },
   "compilerOptions": {
     "strict": true,
-    "lib": ["dom", "dom.iterable", "dom.asynciterable", "deno.ns", "esnext"]
+    "lib": [
+      "dom",
+      "dom.iterable",
+      "dom.asynciterable",
+      "deno.ns",
+      "esnext"
+    ]
   },
-  "exclude": ["dist/"]
+  "exclude": [
+    "dist/",
+    "dist-npm/"
+  ]
 }

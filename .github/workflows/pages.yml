@@ -10,6 +10,9 @@
 # `deno task check` is here because `build` does not type-check, and the suite runs before
 # the build so a red test stops a deploy rather than publishing over it. The GPU tests ask
 # for an adapter and log a skip when there is none, so a runner without a GPU is fine.
+#
+# The site also carries the npm tarball (`pack.ts`), because the package is not on a
+# registry and `npm install <https url>` does not need one. Pages is the distribution.
 
 name: pages
 
@@ -44,8 +47,10 @@ jobs:
       - name: Test
         run: deno task test
 
-      - name: Build the demo
-        run: deno task build
+      # Builds the demo and the npm tarball in one step: `pack` runs the release build
+      # itself, so a second `deno task build` would only throw the first one away.
+      - name: Build the demo and the npm tarball
+        run: deno task pack
 
       - name: Assemble the site
         run: |
@@ -53,11 +58,18 @@ jobs:
           mkdir -p _site/play
           cp -R docs/. _site/
           cp -R dist/. _site/play/
+          # The tarball sits at the site root, which is the URL its README tells people to
+          # install from. Not on a registry: `npm install <https url>` takes it directly.
+          cp dist-npm/*.tgz _site/
           # The demo has to be reachable at play/ or the page's only button is dead.
           test -f _site/index.html
+          test -f _site/start.html
           test -f _site/play/index.html
           test -f _site/play/main.js
+          test -f _site/play/voxler.js
           test -d _site/play/workers
+          # And the install URL has to exist, or the get-started page sends people at a 404.
+          ls _site/voxler-*.tgz
           ls -la _site _site/play
 
       - uses: actions/configure-pages@v5

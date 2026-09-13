@@ -1,10 +1,45 @@
 # Voxler
 
-A voxel engine for the browser, built on WebGPU, aimed at very large worlds at high
-frame rates.
+A voxel engine for the browser, built on WebGPU. A world is generated on the GPU from a
+WGSL function rather than stored as voxel data, so there is no level to load.
 
 It runs at [wistrand.github.io/voxler](https://wistrand.github.io/voxler/) if your
 browser has WebGPU.
+
+## What "very large" means here
+
+What you write is the function, and it is a few hundred lines. The voxels it describes are
+never stored, so no part of a world's extent is a file size. What bounds it instead is the
+coordinate system:
+
+| | |
+| --- | --- |
+| Horizontally | 33.5 million voxels each way from the origin (`±2^20` chunks) |
+| Vertically | 32,768 voxels each way |
+| Across | 67 million voxels, which at a voxel to the metre is about 1.7 times the Earth's circumference |
+| Resident | a radius around the camera, 512 voxels by default |
+| Visible | as far as the fog, 16,384 voxels in the worlds that ship |
+
+The last two rows are the ones that cost anything. Memory follows the resident radius and
+frame time follows what is on screen; neither grows as you fly.
+
+**Where it gives out.** The horizontal figure is a real edge, not a slogan. A chunk is
+addressed by a key packing its coordinates into one 53-bit number (`src/world/keys.ts`),
+21 bits per horizontal axis and 11 vertical, and every path that takes a chunk coordinate
+calls `chunkInRange` first. Past it chunks stop being streamed and meshed, so what is left
+is the ray-marched far field over nothing. Read off the code, not flown to.
+
+Inside the range the engine holds up because it never puts an absolute position in an
+`f32`: positions are an integer voxel coordinate plus a fraction, shaders subtract the
+camera's chunk in integers and convert last, and noise is sampled through integer lattices.
+Measured, terrain a million voxels out is smooth to a sixty-fourth of a voxel.
+
+What gives out first is usually the world program rather than the engine. A world that
+turns its position into a plain vector with `wp_f32(p)` inherits float32 spacing, about
+0.06 voxels at a million and coarser after that, which is enough for geometry to jitter.
+The helpers that stay exact at any distance are `wp_lattice` for noise, `wp_repeat_near`
+for scatter and `wp_local(p, anchor)` for anything placed
+([agent_docs/design-formats.md](agent_docs/design-formats.md) "World program").
 
 Voxler splits the world by distance. Close to the camera, 32-voxel chunks are meshed
 in background workers with binary greedy meshing, which turns occupancy into bit
@@ -64,6 +99,13 @@ and mesh jobs copy their payloads instead of sharing them.
   pulling from storage buffers.
 - **Far field**: a camera-centered clipmap of 8^3 bricks at doubling cell sizes,
   ray-marched in compute and composited behind the near field.
+- **Editing**: two kinds, which behave differently. A CSG brush is a bounded primitive
+  folded into the world's own field on the GPU, so it shows up in the meshed near field,
+  the ray-marched far field and the preview alike, and terrain closes around it. A voxel
+  edit writes block ids into a journal instead. Both survive their chunk being thrown away
+  and regenerated, because a chunk is the field stage followed by a replay of the journal,
+  always in that order. Nothing is written to disk: surviving regeneration is not the same
+  as surviving a reload, and saving the brush records is left to the host.
 - **Light**: one sun or moon, sky ambient and fog, shared by every surface path so the
   meshed world, the preview and the ray-marched distance agree. Glowing blocks flood
   light through the voxels around them, baked per quad corner in the mesher, and

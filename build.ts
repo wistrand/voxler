@@ -46,6 +46,11 @@ async function options(dev: boolean): Promise<esbuild.BuildOptions> {
     entryPoints: {
       index: "index.html",
       main: "src/main.ts",
+      // The engine on its own, with the WGSL inlined: what a page that is not this demo
+      // imports (`import { Voxler } from "./voxler.js"`), and what the published package
+      // will be built from (plan-packaging.md). Its own entry rather than something dug
+      // out of `main.js`, so that what a host gets is a bundle nobody's demo is in.
+      voxler: "src/voxler.ts",
       ...(await workerEntries()),
     },
     outdir: OUT_DIR,

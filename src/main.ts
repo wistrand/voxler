@@ -1,6 +1,8 @@
 // Browser entry point: GPU startup, device-loss recovery, canvas sizing, and the
 // frame loop (update, then render).
 
+import { appSwitches, optionsFromSearch, type SearchProblem, worldFromSearch } from "./app/search-options.ts";
+import { resolveOptions } from "./options.ts";
 import { SCENES } from "./bench/scenes.ts";
 import { type BenchContext, BenchSession } from "./bench/session.ts";
 import { VoxelBench } from "./bench/voxel-bench.ts";
@@ -14,7 +16,7 @@ import { formatCaps } from "./gpu/caps.ts";
 import { createGpu, type Gpu } from "./gpu/device.ts";
 import { describeBird, NO_BIRD, pickBird } from "./render/birds.ts";
 import { Renderer } from "./render/renderer.ts";
-import { DEFAULT_JOBS_PER_MESSAGE, WorkerPool } from "./workers/pool.ts";
+import { WorkerPool } from "./workers/pool.ts";
 import type { CompressInput, CompressOutput } from "./workers/jobs.ts";
 import { BrushBatch } from "./brush/batch.ts";
 import { BrushGrid } from "./brush/grid.ts";
@@ -26,8 +28,6 @@ import { fillBox, fillSphere, hasChunkOps, packChunkOps, setVoxel } from "./brus
 import { newRayHit, raycastVoxels } from "./world/raycast.ts";
 import { BRICK_WORDS, bricksPerChunkSide, tilesChunk } from "./far/reduce.ts";
 import { BRICK_CELLS, BrickGrid } from "./far/bricks.ts";
-import { DEFAULT_CLIPMAP_OPTIONS, levelsForReach, MAX_LEVELS } from "./far/clipmap.ts";
-import { DEFAULT_FAR_SCALE } from "./far/far-field.ts";
 import { BRICK_JOB, FarEdits } from "./far/edits.ts";
 import { DEFAULT_ADAPT_OPTIONS, FarAdapt } from "./far/adapt.ts";
 import type { BrickJobOutput } from "./far/brick-job.ts";
@@ -37,14 +37,14 @@ import { CHUNK_VOLUME, voxelIndex } from "./world/coords.ts";
 import { ChunkStore } from "./world/store.ts";
 import { chunkInRange, chunkKey, keyX, keyY, keyZ } from "./world/keys.ts";
 import { DEFAULT_MESH_OPTIONS, MESH_JOB, MeshScheduler } from "./world/mesh-scheduler.ts";
-import { CLUSTER_QUADS, ORDER_EMISSION, ORDER_MORTON } from "./mesh/cluster.ts";
-import { CULL_ALL, DEFAULT_NEAR_OPTIONS, type NearFieldOptions } from "./render/near-field.ts";
+import { ORDER_MORTON } from "./mesh/cluster.ts";
+import type { NearFieldOptions } from "./render/near-field.ts";
 import type { MeshJobOutput } from "./mesh/job.ts";
-import { ChunkStreamer, DEFAULT_STREAM_OPTIONS, type StreamOptions } from "./world/streaming.ts";
+import { ChunkStreamer } from "./world/streaming.ts";
 import type { Voxelizer } from "./sdf/voxelizer.ts";
 import { runWorkerSelfTest } from "./workers/selftest.ts";
-import { DEFAULT_WORLD, type WorldProgram, WORLDS } from "./worlds/index.ts";
-import { DEFAULT_SKY, fogHorizonVoxels, SKIES } from "./render/sky.ts";
+import { type WorldProgram, WORLDS } from "./worlds/index.ts";
+import { DEFAULT_SKY, SKIES } from "./render/sky.ts";
 
 declare global {
   // Console handle for debugging, e.g. `voxler.gpu.device.destroy()` to test
@@ -108,158 +108,100 @@ const CONTROLS_HELP = "drag: look (mouse or touch)  WASD move  Space/C up/down  
   `?bench=${Object.keys(SCENES).join("|")}&runs=n benchmark`;
 
 const params = new URLSearchParams(location.search);
+// Everything the engine needs, resolved once (`src/options.ts`). The switches still exist
+// and still mean what they meant; what changed is that they are one source of options and
+// no longer the only one, so the same engine can be set up by a host that has no URL
+// (plan-packaging.md phase 1). Anything unknown in the query string lands in
+// `searchProblems` and goes to the overlay as soon as there is one.
+const searchProblems: SearchProblem[] = [];
+const opts = resolveOptions(optionsFromSearch(params, searchProblems));
+// The switches that drive this shell rather than the engine: the benchmark harness, the
+// self-tests and the comparisons.
+const app = appSwitches(params);
 
-// View toggles, kept here so they survive a Renderer rebuild after device loss.
-// `?preview=0` starts with the SDF preview off (P toggles it), e.g. to benchmark
-// streaming without the preview's GPU cost.
-// The preview starts off when streamed meshes are drawn (they show the same world);
-// `?preview=1` forces it on. `?cull=n` is a cull mask (0 none, 3 no occlusion, 7
-// all); `?cullCheck` compares the frame against an unculled draw every 30 frames.
-const meshesByDefault = params.get("stream") !== "0" && params.get("mesh") !== "0" && !params.has("voxelBench");
 // The init stages that stand between a sky and a world, in the order they are waited on
 // (`Renderer.init`). Named here so the panel can say which are outstanding.
 const WORLD_STAGES = ["voxelize", "near", "far"] as const;
 
+// View toggles, kept here so they survive a Renderer rebuild after device loss.
 const view = {
-  preview: params.get("preview") === "1" || (params.get("preview") !== "0" && !meshesByDefault),
-  grid: false,
-  // `?gizmo=0` starts without the axis cross, which is what a screenshot wants.
-  gizmo: params.get("gizmo") !== "0",
+  preview: opts.render.preview,
+  grid: opts.render.grid,
+  gizmo: opts.render.gizmo,
   meshes: true,
 };
-// `?cull=n` is a mask: 1 frustum, 2 face direction, 4 occlusion (so 0 none, 3 no
-// occlusion, 7 all). Anything unparsable keeps the default.
-const cullFlags = params.has("cull") ? intParam("cull", CULL_ALL, 0, CULL_ALL) : CULL_ALL;
-const cullCheck = params.has("cullCheck");
 
-// `?previewScale=0.25..1` sets the SDF preview's resolution relative to the canvas.
-// Sphere tracing is per pixel, so half resolution costs about a quarter.
-const DEFAULT_PREVIEW_SCALE = 0.5;
-function previewScale(): number {
-  const s = Number(params.get("previewScale"));
-  return Number.isFinite(s) && s > 0 ? Math.min(1, Math.max(0.1, s)) : DEFAULT_PREVIEW_SCALE;
-}
-
-// `?stream=0` disables chunk streaming; `?streamRadius=n` and `?streamHeight=n` set
-// the load range in chunks; `?arenaMB=n` sizes the chunk payload arena.
-const DEFAULT_ARENA_MB = 128;
-function intParam(name: string, fallback: number, min: number, max: number): number {
-  const n = Number(params.get(name));
-  return params.has(name) && Number.isInteger(n) ? Math.min(max, Math.max(min, n)) : fallback;
-}
-function numberParam(name: string, fallback: number, min: number, max: number): number {
-  const n = Number(params.get(name));
-  return params.has(name) && Number.isFinite(n) ? Math.min(max, Math.max(min, n)) : fallback;
-}
-function streamOptions(): StreamOptions {
-  return {
-    ...DEFAULT_STREAM_OPTIONS,
-    radius: intParam("streamRadius", DEFAULT_STREAM_OPTIONS.radius, 1, 64),
-    height: intParam("streamHeight", DEFAULT_STREAM_OPTIONS.height, 1, 32),
-  };
-}
-
-// `?voxelSlots=n` sets the voxelizer's readback slots (batches in flight).
-function voxelSlots(): number {
-  const n = Number(params.get("voxelSlots"));
-  return Number.isInteger(n) && n > 0 ? Math.min(16, n) : DEFAULT_VOXEL_SLOTS;
-}
-
-// `?world=<name>&seed=<n>` picks the world program; unknown names fall back to the
-// default with an overlay error.
-function selectWorld(): WorldProgram {
-  let name = params.get("world") ?? DEFAULT_WORLD;
-  if (!(name in WORLDS)) {
-    overlay.error(`unknown world "${name}"; known: ${Object.keys(WORLDS).join(", ")}`);
-    name = DEFAULT_WORLD;
-  }
-  const seed = Number(params.get("seed") ?? 1);
-  const entry = WORLDS[name];
-  // `?sky=<name>` overrides the world's own preset, so a world can be seen at another
-  // time of day without editing it.
-  const skyName = params.get("sky") ?? entry.sky ?? DEFAULT_SKY;
-  const sky = SKIES[skyName] ?? SKIES[DEFAULT_SKY];
-  if (!(skyName in SKIES)) overlay.error(`unknown sky "${skyName}"; known: ${Object.keys(SKIES).join(", ")}`);
-  return {
-    name,
-    code: entry.code,
-    seed: Number.isInteger(seed) ? seed >>> 0 : 1,
-    spawn: entry.spawn,
-    start: entry.start,
-    sky,
-    far: entry.far,
-    // `?birds=0` turns them off, for a frame with one fewer pass in it.
-    birds: entry.birds === true && params.get("birds") !== "0",
-  };
-}
-
-// `?size=1920x1080` renders at a fixed pixel size, letterboxed into the window at its own
-// aspect rather than stretched to the window's (applySize).
-// Benchmarks default to 1080p so results compare across window sizes.
-function fixedSize(): [number, number] | null {
-  const m = params.get("size")?.match(/^(\d+)x(\d+)$/);
-  if (m) return [Number(m[1]), Number(m[2])];
-  return params.has("bench") ? BENCH_DEFAULT_SIZE : null;
-}
+// The cull mask (1 frustum, 2 face direction, 4 occlusion), and the comparison against an
+// unculled draw of the same frame that `?cullCheck` turns on.
+const cullFlags = opts.render.cull;
+const cullCheck = app.cullCheck;
 
 // `?bench=<scene>&runs=<n>` starts a benchmark session instead of the fly controls.
 function benchSession(): BenchSession | null {
-  const name = params.get("bench");
-  if (name === null) return null;
-  const scene = SCENES[name];
+  if (app.bench === null) return null;
+  const scene = SCENES[app.bench];
   if (!scene) {
-    overlay.error(`unknown bench scene "${name}"; known: ${Object.keys(SCENES).join(", ")}`);
+    overlay.error(`unknown bench scene "${app.bench}"; known: ${Object.keys(SCENES).join(", ")}`);
     return null;
   }
-  const runs = Math.min(MAX_BENCH_RUNS, Math.max(1, Math.floor(Number(params.get("runs")) || 1)));
+  const runs = Math.min(MAX_BENCH_RUNS, Math.max(1, app.runs ?? 1));
   // The overlay starts hidden, and a bench run's progress is the one thing worth showing.
   overlay.show();
   return new BenchSession(scene, runs, world.spawn, () => overlay.setSection("bench", bench?.status() ?? ""));
 }
 
-// `?workers=n` overrides the default of one worker per core, minus one for the
-// main thread.
-function workerCount(): number {
-  const requested = Number(params.get("workers"));
-  if (Number.isInteger(requested) && requested > 0) return requested;
-  return Math.max(1, (navigator.hardwareConcurrency || 2) - 1);
-}
-
 const canvas = document.getElementById("view") as HTMLCanvasElement;
 const overlay = new Overlay(document.body);
+// Anything the query string asked for that does not exist. Reported, not thrown: the
+// options layer has already fallen back to something that runs.
+for (const problem of searchProblems) overlay.error(problem.message);
 const camera = new FlyCamera();
 const controls = new FlyControls(canvas, camera);
 const stats = new Stats();
 // Worker URL is the built output path next to main.js (build.ts workerEntries()).
 const pool = new WorkerPool(
-  (i) => new Worker(new URL("./workers/voxel.worker.js", import.meta.url), { type: "module", name: `voxel-${i}` }),
-  workerCount(),
-  intParam("jobBatch", DEFAULT_JOBS_PER_MESSAGE, 1, 64),
+  opts.workers.factory ??
+    ((i) => new Worker(new URL("./workers/voxel.worker.js", import.meta.url), { type: "module", name: `voxel-${i}` })),
+  opts.workers.count,
+  opts.workers.jobsPerMessage,
 );
 pool.onError = (kind, key, message) => overlay.error(`job ${kind} ${key} failed: ${message}`);
 globalThis.voxler = { gpu: null, renderer: null, camera, pool };
 // Order matters: benchSession() reads world.spawn. Module-level consts are bundled
 // as vars, so a use before this line sees undefined rather than a TDZ error.
-const world = selectWorld();
-const renderSize = fixedSize();
+// The world the renderer, the voxelizer and the preview all read. Everything in it but
+// the name comes from the resolved options; the name is a label for shader errors and the
+// overlay, so it lives with the shell that knows a `?world=` was typed.
+const world: WorldProgram = {
+  name: worldFromSearch(params).name,
+  code: opts.world.code,
+  seed: opts.world.seed,
+  spawn: opts.world.spawn,
+  start: opts.world.start,
+  sky: opts.world.sky,
+  birds: opts.world.birds,
+};
+const renderSize = opts.render.size;
 const bench = benchSession();
 let voxelBench: VoxelBench | null = null;
 
 // Chunk store and streaming are CPU state: they survive device loss, and attach to
 // each new voxelizer. Off for ?voxelBench (it owns the voxelizer) and ?stream=0.
-const streaming = params.get("stream") !== "0" && !params.has("voxelBench");
-const streamOpts = streamOptions();
+const streaming = opts.streaming;
+const streamOpts = opts.stream;
 const store = new ChunkStore({
   maxChunks: Math.ceil(ChunkStreamer.keepCapacity(streamOpts) * 1.25),
-  arenaBytes: intParam("arenaMB", DEFAULT_ARENA_MB, 16, 2048) * 1048576,
+  arenaBytes: opts.arenaBytes,
   shared: canShareMemory(),
 });
 const streamer = new ChunkStreamer(store, streamOpts);
 // `?regen=n` regenerates n random resident chunks a frame, the soak test for the
 // regeneration path (plan-world-modelling phase 2); `?regenCheck` compares every
-// replaced chunk against the one it replaced and counts differences.
-const regenPerFrame = intParam("regen", 0, 0, 1024);
-streamer.checkRegen = params.has("regenCheck");
+// replaced chunk against the one it replaced and counts differences. A soak, and not the
+// streamer's own `regenPerFrame`, which is how many chunks an *edit* has changed it puts
+// back through the voxelizer.
+const regenPerFrame = app.regen;
+streamer.checkRegen = app.regenCheck;
 globalThis.voxler.store = store;
 globalThis.voxler.streamer = streamer;
 let compressVersion = 0;
@@ -337,65 +279,30 @@ function applyBrushEdits(): void {
 // Meshing follows streaming: stored chunks are meshed in workers once their
 // neighbors are in. Nothing draws the meshes yet (plan-rendering); results are
 // counted and recycled. `?mesh=0` turns it off.
-const meshing = streaming && params.get("mesh") !== "0";
+const meshing = opts.meshing;
 // Constructed only when used: it turns on deferred frees in the store.
 // `?clusterQuads=n` sets the cluster size for this session (plan-rendering phase 1);
 // `?nearMB=n` the near-field quad arena budget (plan-rendering phase 2).
-const clusterQuads = intParam("clusterQuads", CLUSTER_QUADS, 1, 255);
-// `?clusterOrder=morton` sorts a cluster's quads by Morton code instead of mesher
-// order; the two are compared by cull rate (plan-rendering phase 4).
-const clusterOrder = params.get("clusterOrder") === "morton" ? ORDER_MORTON : ORDER_EMISSION;
-// `?ao=0` meshes without baked AO (flat lighting), the A/B for plan-rendering
-// phase 5. Off, a mesh job reads 6 neighbors instead of 26.
-const bakedAo = params.get("ao") !== "0";
-// `?tex=0` draws flat block colors instead of sampling the block textures.
-const textured = params.get("tex") !== "0";
-// `?glow=0` drops each block's emission, the A/B for plan-living-world phase 1.
-const emissive = params.get("glow") !== "0";
-// `?wind=0` holds the foliage still, the A/B for phase 2.
-const animated = params.get("wind") !== "0";
-// Block light is baked in the mesh job as well as read in the shader, so ?light=0 turns
-// off both: the A/B is what the fill costs, not only what it looks like.
-const blockLight = params.get("light") !== "0";
-// Shadow rays march the far field's clipmap, so they need it built: `?far=0` leaves the
-// scene unshadowed whatever this says.
-const shadows = params.get("shadow") !== "0";
+const clusterQuads = opts.mesh.clusterQuads;
+const clusterOrder = opts.mesh.clusterOrder;
+const bakedAo = opts.mesh.ao;
+const textured = opts.render.textures;
+const emissive = opts.render.glow;
+const animated = opts.render.wind;
+const blockLight = opts.mesh.blockLight;
+// Shadow rays march the far field's clipmap, so they need it built: `?far=0` has already
+// taken them with it by the time this is read (`resolveOptions`).
+const shadows = opts.shadows;
 // `?farCheck` compares the SDF-sampled bricks against the same region reduced from
 // resident chunk data (plan-far-field phase 2). `?farLevels=n` sets the clipmap's
 // level count, `?farBricks=n` the pool capacity in bricks, and `?farSlabs=n` how many
 // brick slabs are sampled per frame (phase 3).
-const farCheck = params.has("farCheck");
-// A world may widen or shorten the clipmap for itself (`far` in src/worlds/index.ts);
-// the switches below still win over what it asked for.
-const farDefaults = { ...DEFAULT_CLIPMAP_OPTIONS, ...world.far };
-// `?farSize=n` sets the bricks per side of every level, which is the reach of each
-// level at its own cell size: doubling it halves the cell size at a given distance.
-// Powers of two only; the clipmap rejects anything else.
-const farSize = intParam("farSize", farDefaults.size, 8, 128);
-const farFirst = intParam("farFirst", farDefaults.firstLevel, 1, 6);
-// Levels past the world's fog horizon march for nothing: what they find is mixed to the
-// sky colour the sky pass already drew. So the default level count is trimmed to the
-// horizon rather than taken as written. `?farLevels=n` overrides it outright, because a
-// measurement wants the setting it asked for.
-const farLevels = params.has("farLevels")
-  ? intParam("farLevels", farDefaults.levels, 1, MAX_LEVELS)
-  : Math.min(
-    farDefaults.levels,
-    levelsForReach(farSize, farFirst, fogHorizonVoxels(world.sky), MAX_LEVELS),
-  );
-const farOptions = {
-  clipmap: {
-    ...farDefaults,
-    size: farSize,
-    levels: farLevels,
-    firstLevel: farFirst,
-    bricks: intParam("farBricks", farDefaults.bricks, 4096, 1 << 20),
-  },
-  slabsPerFrame: intParam("farSlabs", 2, 1, 16),
-  scale: numberParam("farScale", DEFAULT_FAR_SCALE, 0.1, 1),
-};
-// `?farBeam=0` turns the beam pre-pass off (plan-far-field phase 5).
-const farBeam = params.get("farBeam") !== "0";
+const farCheck = app.farCheck;
+// The clipmap a world asked for, trimmed to the distance its fog closes the view at, with
+// any `?far*` switch winning over both. All of it decided in `resolveOptions`; what is
+// left here is handing it to the renderer.
+const farOptions = { clipmap: opts.far.clipmap, slabsPerFrame: opts.far.slabsPerFrame, scale: opts.far.scale };
+const farBeam = opts.far.beam;
 // The far field's reach and build budget can follow what they cost on this machine
 // (src/far/adapt.ts), but only when asked: `?farAdapt=1`.
 //
@@ -405,14 +312,12 @@ const farBeam = params.get("farBeam") !== "0";
 // them. A controller that changes the picture while the camera is still has to be
 // imperceptible before it can be the default, and this one is not yet: over a minute
 // standing in one place it walked terrain from eight levels to five.
-const farAdapt = params.get("farAdapt") === "1";
-// The far field is on unless `?far=0` says otherwise; `?far=steps|bricks|levels` picks
-// a debug view (plan-far-field)
-// and picks its debug view. F rebuilds its bricks around the camera.
-const farMode = params.get("far") ?? "on";
-const farOn = farMode !== "0" && farMode !== "off";
+const farAdapt = opts.far.adapt;
+// `?far=steps|bricks|levels` picks a debug view; F rebuilds its bricks around the camera.
+const farMode = opts.far.debug;
+const farOn = opts.farOn;
 const nearOptions: NearFieldOptions = {
-  quadMiB: intParam("nearMB", DEFAULT_NEAR_OPTIONS.quadMiB, 8, 2048),
+  quadMiB: opts.render.nearMiB,
   slots: store.capacity, // a mesh per stored chunk at most
   clusterQuads,
   ao: bakedAo,
@@ -498,10 +403,9 @@ function showMessage(text: string): void {
 // otherwise it starts where the world opens: its own `start`, or its spawn point when it
 // does not name one. The aim is the same everywhere, looking along -Z and a little down.
 function placeCamera(): void {
-  const at = params.get("at")?.split(",").map(Number);
-  const from = at && at.length === 3 && at.every(Number.isFinite) ? at : world.start ?? world.spawn;
+  const from = app.at ?? opts.camera.at;
   camera.setPosition(from[0], from[1], from[2]);
-  camera.setOrientation(0, START_PITCH);
+  camera.setOrientation(opts.camera.yaw, opts.camera.pitch);
 }
 
 function describeCamera(): string {
@@ -769,9 +673,9 @@ function frame(now: number): void {
       streamer.update(camera.chunk[0], camera.chunk[1], camera.chunk[2]);
     }
     mesher?.update(camera.chunk[0], camera.chunk[1], camera.chunk[2]);
-    renderer.voxelizer.pump(voxelBench ? voxelSlots() : VOXEL_BATCHES_PER_FRAME);
+    renderer.voxelizer.pump(voxelBench ? opts.voxelSlots : VOXEL_BATCHES_PER_FRAME);
     stats.end(CPU_RENDER);
-    voxelBench?.update(gpu.caps, voxelSlots());
+    voxelBench?.update(gpu.caps, opts.voxelSlots);
   }
   // Buffers consumed this frame go back to the workers in one message.
   pool.flushRecycled();
@@ -849,8 +753,8 @@ async function start(): Promise<void> {
   }
 
   const renderer = new Renderer(gpu, (m) => overlay.error(m), world, {
-    previewScale: previewScale(),
-    voxelSlots: voxelSlots(),
+    previewScale: opts.render.previewScale,
+    voxelSlots: opts.voxelSlots,
     recycle: (buffer) => pool.recycle(buffer),
     near: nearOptions,
     far: farOptions,
@@ -912,12 +816,12 @@ async function start(): Promise<void> {
   if (gen !== generation) return;
   overlay.setSection(
     "world",
-    `world  ${world.name}  seed ${world.seed}  preview at ${previewScale()}x resolution, built on demand (P)\n` +
+    `world  ${world.name}  seed ${world.seed}  preview at ${opts.render.previewScale}x resolution, built on demand (P)\n` +
       `      pipelines ${Object.entries(renderer.startup).map(([k, ms]) => `${k} ${ms.toFixed(0)}`).join("  ")} ms`,
   );
   mesher?.remeshAll(); // a rebuilt renderer starts with no meshes
   if (streaming) attachStreaming(renderer.voxelizer);
-  if (params.has("voxelBench") && !voxelBench) {
+  if (app.voxelBench && !voxelBench) {
     // The voxelizer gets the GPU to itself: no preview while measuring.
     view.preview = false;
     renderer.showPreview = false;
@@ -1125,9 +1029,11 @@ function reloadWith(key: string, value: string | null): void {
   location.search = next.toString();
 }
 
+// The sky in force, which is the world's own unless `?sky=` overrode it. Read off the
+// resolved sky rather than off the query string: the fallbacks already happened there, so
+// an unknown `?sky=` cycles from what is actually being drawn.
 function currentSky(): string {
-  const name = params.get("sky") ?? world.sky.name;
-  return name in SKIES ? name : DEFAULT_SKY;
+  return world.sky.name in SKIES ? world.sky.name : DEFAULT_SKY;
 }
 
 function cycleSky(): void {
@@ -1354,4 +1260,4 @@ placeCamera();
 overlay.setSection("controls", CONTROLS_HELP);
 requestAnimationFrame(frame);
 start();
-if (params.has("workerTest")) workerTest();
+if (app.workerTest) workerTest();

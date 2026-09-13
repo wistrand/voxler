@@ -4,9 +4,9 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Voxler</title>
-<meta name="description" content="A voxel engine for the browser, on WebGPU. Very large worlds at high frame rates.">
+<meta name="description" content="A voxel engine for the browser, on WebGPU. Worlds are generated from a WGSL function: no voxel data to load, 67 million voxels across.">
 <meta property="og:title" content="Voxler">
-<meta property="og:description" content="A voxel engine for the browser, on WebGPU. Very large worlds at high frame rates.">
+<meta property="og:description" content="A voxel engine for the browser, on WebGPU. Worlds are generated from a WGSL function: no voxel data to load, 67 million voxels across.">
 <meta property="og:image" content="media/forest-night.jpg">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' fill='%23223'/%3E%3Cpath d='M8 2l5 3v6l-5 3-5-3V5z' fill='%236c8'/%3E%3Cpath d='M8 2l5 3-5 3-5-3z' fill='%239ea'/%3E%3Cpath d='M8 8v6l-5-3V5z' fill='%234a6'/%3E%3C/svg%3E">
 <style>
@@ -51,6 +51,10 @@
     padding: 1rem 1.15rem; color: var(--dim);
   }
   .note strong { color: var(--text); }
+  table { border-collapse: collapse; width: 100%; margin: 0 0 1.25rem; font-size: .95rem; }
+  td { text-align: left; padding: .45rem .7rem; border-bottom: 1px solid var(--edge); vertical-align: top; }
+  td:first-child { color: var(--dim); white-space: nowrap; width: 9rem; }
+  code { font: .9em ui-monospace, SFMono-Regular, Menlo, monospace; background: var(--panel); border-radius: 4px; padding: .1em .35em; }
   ul { padding-left: 1.15rem; }
   li { margin-bottom: .35rem; }
   kbd {
@@ -66,10 +70,12 @@
 <header>
   <h1>Voxler</h1>
   <p class="lead">
-    A voxel engine for the browser, on WebGPU. Very large worlds at high frame rates.
+    A voxel engine for the browser, on WebGPU. A world is generated on the GPU from a
+    WGSL function rather than stored as voxel data, so there is no level to load.
   </p>
   <div class="actions">
     <a class="button" href="play/?world=forest">Open the forest</a>
+    <a class="button secondary" href="start.html">Get started</a>
     <a class="button secondary" href="https://github.com/wistrand/voxler">Source</a>
   </div>
 </header>
@@ -110,6 +116,54 @@
   near field's shadow rays march, so shadows cost no shadow map and no second draw.
 </p>
 
+<h2>How large is very large</h2>
+
+<p>
+  What you write is the function, and it is a few hundred lines. The voxels it describes
+  are never stored, so no part of a world's extent is a file size. What bounds it instead
+  is the coordinate system:
+</p>
+
+<table>
+  <tr><td>Horizontally</td><td>33.5 million voxels each way from the origin</td></tr>
+  <tr><td>Vertically</td><td>32,768 voxels each way</td></tr>
+  <tr><td>Across</td><td>67 million voxels, about 1.7 times the Earth's circumference at a voxel to the metre</td></tr>
+  <tr><td>In memory</td><td>a radius around the camera, 512 voxels by default</td></tr>
+  <tr><td>On screen</td><td>as far as the fog, 16,384 voxels in the worlds here</td></tr>
+</table>
+
+<p>
+  The last two rows are the ones that cost anything. Memory follows the resident radius and
+  frame time follows what is on screen; neither grows as you fly.
+</p>
+
+<h2>Where it gives out</h2>
+
+<p>
+  The horizontal figure is a real edge. A chunk is addressed by a key packing its
+  coordinates into one 53-bit number, 21 bits per horizontal axis and 11 vertical, and
+  every path that takes a chunk coordinate checks the range first. Past it chunks stop
+  being streamed and meshed, so you would be looking at the ray-marched far field over
+  nothing. That is read off the code rather than flown to.
+</p>
+
+<p>
+  Inside the range the engine holds up, because it never puts an absolute position in a
+  <code>f32</code>: positions are an integer voxel coordinate plus a fraction, shaders
+  subtract the camera's chunk in integers and convert last, and noise is sampled through
+  integer lattices. Measured, terrain a million voxels out is smooth to a sixty-fourth of a
+  voxel.
+</p>
+
+<p>
+  What gives out first is usually the world program rather than the engine. A world that
+  turns its position into a plain vector with <code>wp_f32(p)</code> inherits float32
+  spacing, about 0.06 voxels at a million and coarser after that, which is enough for
+  geometry to jitter. The helpers that stay exact at any distance are
+  <code>wp_lattice</code> for noise, <code>wp_repeat_near</code> for scatter and
+  <code>wp_local(p, anchor)</code> for anything placed.
+</p>
+
 <figure>
   <img src="media/clipmap-levels.jpg" alt="The desert from above with each clipmap level in a different colour, forming nested square windows around the camera." width="1600" height="900">
   <figcaption>
@@ -137,6 +191,23 @@
     </figcaption>
   </figure>
 </div>
+
+<h2>Using it</h2>
+
+<p>
+  A world is a WGSL program, and the engine is one object that takes one. There is no
+  scene to build and no assets to load: hand it a signed distance function and a material
+  function and you have streaming, meshing, GPU culling, a ray-marched horizon and
+  shadows.
+</p>
+
+<pre style="background: var(--panel); border: 1px solid var(--edge); border-radius: 8px; padding: .9rem 1.05rem; overflow-x: auto; font: 13px/1.6 ui-monospace, Menlo, monospace;"><code>const voxler = await Voxler.create(canvas, { world: { code: myWorldWgsl } });
+voxler.start();</code></pre>
+
+<p>
+  <a href="start.html">The get-started page</a> has the world contract, every option, and a
+  world small enough to read compiling and running on the page itself.
+</p>
 
 <h2>Controls</h2>
 

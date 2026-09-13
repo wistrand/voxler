@@ -102,6 +102,7 @@ plan tracks its own phases; update the status column when a plan starts or lands
 | 7     | [plan-world-modelling.md](agent_docs/plan-world-modelling.md) | brushes (SDF, CSG, voxel), placement, the edit journal, regeneration | done        |
 | 8     | [plan-living-world.md](agent_docs/plan-living-world.md)     | emissive materials, motion, a fantasy forest world, block light, night and shadows | done |
 | 9     | [plan-monument-valley.md](agent_docs/plan-monument-valley.md) | the Monument Valley buttes as a world program, and the far field seen across a kilometre | in progress |
+| 10    | [plan-packaging.md](agent_docs/plan-packaging.md)           | an embeddable API: a façade over the subsystems, options instead of URL switches, an npm package | in progress |
 
 The renderer plans are built and plan-living-world has landed: what the engine draws
 rather than how fast it draws it. What it left open is in that plan's phases 4 and 5
@@ -129,6 +130,9 @@ today `src/gpu/`, `src/render/`, `src/camera/`, `src/util/`, `src/debug/`,
 | Path             | Role                                                           |
 | ---------------- | -------------------------------------------------------------- |
 | `src/main.ts`    | entry point, frame loop                                        |
+| `src/voxler.ts`  | the `Voxler` class: the engine as one object, and the package's entry point. Built to `dist/voxler.js` ([plan-packaging.md](agent_docs/plan-packaging.md)) |
+| `src/options.ts` | `VoxlerOptions` and `resolveOptions()`: what a host passes in and what the engine reads |
+| `src/app/`       | the demo shell's own pieces; `search-options.ts` is the only file that knows a URL exists |
 | `src/camera/`    | fly camera state (pure), input controls, and the follow flyover |
 | `src/gpu/`       | device setup, caps probe, pipeline and resource helpers        |
 | `src/world/`     | block registry, chunk container, chunk table, streaming, mesh scheduling |
@@ -147,9 +151,11 @@ today `src/gpu/`, `src/render/`, `src/camera/`, `src/util/`, `src/debug/`,
 | `build.ts`       | esbuild bundling (`buildRelease()`, `watch()`)                 |
 | `serve.ts`       | static server for `dist/` with COOP/COEP headers; `--dev` also watches, rebuilds and answers the benchmark save route |
 | `docs-serve.ts`  | static server for the Pages site, deliberately without COOP/COEP (`deno task docs`) |
+| `pack.ts`        | the npm tarball: `voxler.js`, the worker, a generated `package.json`. Installed by URL, not from a registry ([plan-packaging.md](agent_docs/plan-packaging.md)) |
+| `src/version.ts` | the version, read by `pack.ts`, printed in `docs/start.html`, exported from the bundle; `src/release_test.ts` keeps the first two in step |
 | `dist/`          | build output, gitignored; CI copies it into the published site under `play/` |
 | `agent_docs/`    | deep dives (linked below)                                      |
-| `docs/`          | the GitHub Pages site: landing page and screenshots, published with a demo built in CI (`docs/README.md`) |
+| `docs/`          | the GitHub Pages site: landing page, the get-started page that embeds the API, and screenshots (`docs/README.md`) |
 | `.github/`       | the `pages` workflow: check, test, build, then publish `docs/` with `dist/` under `play/` |
 | `LICENSE`        | Apache 2.0                                                     |
 
@@ -163,7 +169,9 @@ deno task build    # clean release bundle into dist/; fails on any esbuild warni
 deno task serve    # serve an existing dist/ without rebuilding
 deno task docs     # build, then serve the GitHub Pages site with no COOP/COEP, as Pages
                    # serves it (127.0.0.1:8001; BASE=voxler to mirror the project subpath)
-deno task check    # type-check src/, build.ts, serve.ts, docs-serve.ts
+deno task pack     # release build plus dist-npm/voxler-<version>.tgz, an npm-installable
+                   # tarball; not published to a registry, CI puts it on the site instead
+deno task check    # type-check src/, build.ts, serve.ts, docs-serve.ts, pack.ts
 deno task test     # unit tests; GPU tests use Deno's built-in WebGPU (skip without an adapter)
 deno task bench    # kernel benchmarks (meshing, palette compression, reduction)
 ```

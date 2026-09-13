@@ -67,17 +67,41 @@ export class FlyControls {
   private readonly dolly = new Float64Array(3);
   private readonly dollyDir = new Float64Array(3);
 
+  // Kept so `dispose()` can take them off again. Two of them are on the window rather
+  // than the canvas, because a key released after the pointer left the canvas still has
+  // to be released, and a window listener outlives the element it was added for: an
+  // engine that is torn down without this keeps steering a camera nobody can see.
+  private readonly listeners: (() => void)[] = [];
+
   constructor(canvas: HTMLCanvasElement, camera: FlyCamera) {
     this.canvas = canvas;
     this.camera = camera;
-    addEventListener("keydown", (e) => this.onKey(e, true));
-    addEventListener("keyup", (e) => this.onKey(e, false));
-    addEventListener("blur", () => this.releaseKeys());
-    canvas.addEventListener("pointerdown", (e) => this.onPointerDown(e));
-    canvas.addEventListener("pointermove", (e) => this.onPointerMove(e));
-    canvas.addEventListener("pointerup", (e) => this.onPointerUp(e));
-    canvas.addEventListener("pointercancel", (e) => this.onPointerUp(e));
-    canvas.addEventListener("wheel", (e) => this.onWheel(e), { passive: true });
+    const on = <T extends Event>(
+      target: EventTarget,
+      type: string,
+      handler: (e: T) => void,
+      options?: AddEventListenerOptions,
+    ) => {
+      const fn = handler as EventListener;
+      target.addEventListener(type, fn, options);
+      this.listeners.push(() => target.removeEventListener(type, fn, options));
+    };
+    on<KeyboardEvent>(globalThis, "keydown", (e) => this.onKey(e, true));
+    on<KeyboardEvent>(globalThis, "keyup", (e) => this.onKey(e, false));
+    on(globalThis, "blur", () => this.releaseKeys());
+    on<PointerEvent>(canvas, "pointerdown", (e) => this.onPointerDown(e));
+    on<PointerEvent>(canvas, "pointermove", (e) => this.onPointerMove(e));
+    on<PointerEvent>(canvas, "pointerup", (e) => this.onPointerUp(e));
+    on<PointerEvent>(canvas, "pointercancel", (e) => this.onPointerUp(e));
+    on<WheelEvent>(canvas, "wheel", (e) => this.onWheel(e), { passive: true });
+  }
+
+  // Every listener off, and the keys released so a camera someone else is driving does
+  // not keep the last direction held.
+  dispose(): void {
+    for (const off of this.listeners) off();
+    this.listeners.length = 0;
+    this.releaseKeys();
   }
 
   // Which way the up and down keys are pressed, -1, 0 or 1, and whether sprint is held.

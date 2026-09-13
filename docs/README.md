@@ -3,9 +3,22 @@
 The GitHub Pages site: `index.html` plus the screenshots in `media/`. Committed, because
 it is content.
 
+`start.html` is the get-started page, and it is the one page here that is not only prose:
+it imports `play/voxler.js`, the engine bundle the build emits, and runs two worlds whose
+WGSL it reads out of the `<code>` blocks it displays. The source shown and the source
+compiled are the same string, so the page cannot drift from what it claims. It is also the
+first consumer of the packaging API (`Voxler.create`), which makes it the check that the
+API works from outside this repository rather than only inside it
+([plan-packaging.md](../agent_docs/plan-packaging.md)).
+
+The npm tarball is published here too. `deno task pack` builds it and the workflow copies
+`dist-npm/*.tgz` to the site root, so `npm install https://wistrand.github.io/voxler/voxler-<version>.tgz`
+works without a registry. The version in `start.html` is checked against the one the build
+produces by `src/release_test.ts`.
+
 The playable build is not committed. `.github/workflows/pages.yml` runs `deno task build`
-and copies `dist/` into `play/` of the published site, so the link on the page is
-`play/?world=forest`. Nothing under `dist/` ever lands in the repo.
+and copies `dist/` into `play/` of the published site, so the links on the page are
+`play/?world=forest` and `play/voxler.js`. Nothing under `dist/` ever lands in the repo.
 
 `deno task docs` builds and serves both halves the way Pages will: the site at `/`, the
 demo at `play/`, and no COOP/COEP. It reads `docs/` and `dist/` off disk rather than
