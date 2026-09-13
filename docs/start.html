@@ -46,19 +46,50 @@
   .stage { position: relative; border: 1px solid var(--edge); border-radius: 8px; overflow: hidden; background: #000; }
   .stage canvas { display: block; width: 100%; aspect-ratio: 16 / 9; touch-action: none; cursor: grab; }
   .stage canvas:active { cursor: grabbing; }
+  /* It is focusable so it can take the keyboard back from a text field; the ring adds
+     nothing to a picture. */
+  .stage canvas:focus { outline: none; }
   .stage .status {
     position: absolute; inset: 0; display: grid; place-items: center; padding: 1.5rem;
     text-align: center; color: var(--dim); background: rgba(14, 17, 22, .82);
     font: 14px/1.6 ui-monospace, monospace;
   }
   .stage .status[hidden] { display: none; }
+  .stage .hud {
+    position: absolute; top: .6rem; right: .6rem; padding: .45rem .6rem; border-radius: 6px;
+    background: rgba(14, 17, 22, .72); color: #cfe0d6; pointer-events: none;
+    font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre;
+    font-variant-numeric: tabular-nums;
+  }
+  .stage .hud[hidden] { display: none; }
   .runbar { display: flex; gap: .6rem; align-items: center; margin: .6rem 0 1.25rem; flex-wrap: wrap; }
   button {
     padding: .45rem .9rem; border: 1px solid var(--edge); border-radius: 6px;
     background: var(--panel); color: var(--text); font: inherit; cursor: pointer;
   }
   button:hover { border-color: var(--accent); }
+  button.secondary { color: var(--dim); }
   .runbar .hint { color: var(--dim); font-size: .9rem; }
+  .runbar .toggle { display: flex; align-items: center; gap: .35rem; cursor: pointer; }
+  .runbar .toggle input { cursor: pointer; }
+  pre:has(code[contenteditable]) { border-color: #33404e; }
+  code[contenteditable] { display: block; outline: none; caret-color: var(--accent); min-height: 3em; }
+  pre:has(code[contenteditable]:focus) { border-color: var(--accent); }
+  .editbar {
+    display: flex; gap: .5rem; align-items: center; flex-wrap: wrap;
+    margin: -.6rem 0 1.5rem; font-size: .9rem;
+  }
+  .editbar .tag {
+    color: var(--dim); border: 1px solid var(--edge); border-radius: 4px; padding: .1rem .45rem;
+    font-size: .8rem;
+  }
+  .editor { margin: 0 0 1.5rem; }
+  .editor pre { margin: .6rem 0 0; max-height: 26rem; overflow: auto; }
+  .editor .msg {
+    margin: .5rem 0 0; color: var(--warn); font: 12px/1.5 ui-monospace, monospace;
+    white-space: pre-wrap; border-left: 3px solid var(--warn); padding-left: .7rem;
+  }
+  .editor .msg[hidden] { display: none; }
   .edits {
     border: 1px solid var(--edge); border-radius: 8px; padding: .8rem 1rem; margin: 0 0 1.5rem;
     display: flex; flex-wrap: wrap; gap: .5rem 1.4rem; align-items: center;
@@ -79,9 +110,9 @@
   <div class="crumb"><a href="./">Voxler</a> / get started</div>
   <h1>Write a world, get a renderer</h1>
   <p class="lead">
-    A world in voxler is not a file of voxels. It is a WGSL program: a signed distance
-    function and a material function. You hand it to the engine and get streaming,
-    meshing, culling, a ray-marched horizon and shadows, without wiring any of them up.
+    You write two WGSL functions: one says how far away the nearest surface is, the other
+    says what each voxel is made of. Voxler does the streaming, meshing, culling, horizon
+    and shadows.
   </p>
 </header>
 
@@ -92,87 +123,35 @@
   </p>
 </div>
 
-<h2>Install</h2>
-
-<p>
-  Voxler is not on the npm registry. Install the tarball by its URL instead:
-</p>
-
-<pre><code>npm install https://wistrand.github.io/voxler/voxler-0.1.0.tgz</code></pre>
-
-<p>
-  Pin the version in the URL. npm caches a tarball by the URL it came from, so a filename
-  that moves is a dependency that moves under you.
-</p>
-
-<p>
-  Inside are <code>voxler.js</code>, with the WGSL already inlined, and
-  <code>workers/voxel.worker.js</code> beside it, where the default worker factory looks
-  for it. It ships as a bundle rather than as source so that your build never has to
-  understand <code>import ... with { type: "text" }</code>.
-</p>
-
-<div class="note">
-  <p style="margin:0">
-    <strong>No TypeScript declarations yet.</strong> Deno emits no <code>.d.ts</code> and
-    hand-writing one for a surface this size would drift from the code inside a week, so
-    for now a TypeScript caller gets <code>any</code> from the import. It is the open item
-    in
-    <a href="https://github.com/wistrand/voxler/blob/main/agent_docs/plan-packaging.md">plan-packaging.md</a>.
-  </p>
-</div>
-
-<p>
-  This page does not use the tarball: it imports <code>play/voxler.js</code> directly,
-  which is the same file the tarball is built from.
-</p>
-
 <h2>Try it</h2>
 
 <div class="stage">
   <canvas id="view"></canvas>
-  <div class="status" id="status">pick a world</div>
+  <div class="status" id="status">starting</div>
+  <div class="hud" id="hud" hidden></div>
 </div>
 
 <div class="runbar">
   <button data-world="small">Hills</button>
   <button data-world="big">Mountains, sea and boulders</button>
   <button id="stop" hidden>Dispose</button>
-  <span class="hint">Drag to look, WASD to move, Space and C for up and down. The running
-    engine is <code>voxler</code> in the console.</span>
+  <label class="toggle"><input type="checkbox" id="show-hud"> Stats</label>
+  <span class="hint">Click the view, then drag to look, WASD to move, Space and C for up
+    and down. The running engine is <code>voxler</code> in the console.</span>
 </div>
 
-<div class="edits">
-  <span class="edits-label">Edits, applied to whichever world is running:</span>
-  <label><input type="checkbox" data-edit="pillar"> CSG pillar <span class="dim">smooth union, subtracted bore</span></label>
-  <label><input type="checkbox" data-edit="cave"> Carved hollow <span class="dim">a subtracted sphere in the ground</span></label>
-  <label><input type="checkbox" data-edit="waymark"> Waymark <span class="dim">a list of explicit voxels</span></label>
-  <p class="edits-note">
-    Each is one brush. They go in front of where you started; fly back if you have wandered
-    off. Unticking removes the brush and the terrain closes over it.
-  </p>
+<div class="editor">
+  <div class="editbar">
+    <button id="run-edit">Run this source</button>
+    <button id="reset-edit" class="secondary">Reset</button>
+    <span class="tag" id="editor-world">nothing loaded</span>
+    <span class="hint">Edit the WGSL and run it. Nothing leaves the page.</span>
+  </div>
+  <pre><code id="world-src" contenteditable="plaintext-only" spellcheck="false" autocapitalize="off" autocorrect="off">loading the Hills source...</code></pre>
+  <p class="msg" id="editor-msg" hidden></p>
 </div>
 
-<h2>The whole thing</h2>
-
-<p>
-  That is the whole of it. Three lines, and the rest of this page is optional.
-</p>
-
-<pre><code>import { Voxler } from "voxler";
-
-const voxler = await Voxler.create(canvas, { world: { code: myWorldWgsl } });
-voxler.start();</code></pre>
-
-<h2>A world that runs</h2>
-
-<p>
-  This is the complete source of <strong>Hills</strong> above: four octaves of noise, sand
-  in the hollows, snow on the tops. The page reads it out of this block and compiles it, so
-  what you see here is what ran.
-</p>
-
-<pre><code id="world-src">// Bound on the gradient of world_sdf. Overestimating is safe and slow; under-
+<template id="src-small">// Bound on the gradient of world_sdf. Overestimating is safe and slow; under-
 // estimating deletes terrain, so start high and tighten it later.
 const WORLD_LIPSCHITZ: f32 = 2.0;
 
@@ -191,25 +170,14 @@ fn world_material(p: WorldPoint) -&gt; u32 {
   if (y &gt; 74.0) { return BLOCK_SNOW; }
   if (y &lt; 52.0) { return BLOCK_SAND; }
   return BLOCK_GRASS;
-}</code></pre>
+}</template>
+<template id="src-big">const WORLD_LIPSCHITZ: f32 = 2.0;
 
-<p>
-  No data was downloaded to draw that. The terrain is evaluated on the GPU from the source
-  above: full resolution near the camera, coarser cells out to the fog.
-</p>
-
-<h2>Something with more in it</h2>
-
-<p>
-  <strong>Mountains, sea and boulders</strong>, the second button. The same three
-  functions, with a mask over the mountains and a scatter of rocks. Read the scatter.
-  Placing objects on a lattice is where worlds usually go wrong.
-</p>
-
-<pre><code id="world-src-2">const WORLD_LIPSCHITZ: f32 = 2.0;
-
-const SEA_LEVEL = 46.0;
-const SNOW_LINE = 88.0;
+// Sea and snow are set against what the noise actually produces here: the ground runs
+// from about 73 to 180, so a sea at 82 floods the lowest quarter and snow starts well
+// up the mountains. fbm2's octaves sum past 1, which is why these are not 0.5 and 0.9.
+const SEA_LEVEL = 82.0;
+const SNOW_LINE = 130.0;
 // One lattice cell per 48 voxels, three tries in each, and a boulder small enough that it
 // plus its jitter stays inside one cell. That last part is what keeps a 3x3 neighbourhood
 // enough to find every boulder that could reach this sample.
@@ -279,7 +247,60 @@ fn world_material(p: WorldPoint) -&gt; u32 {
   if (y &gt; SNOW_LINE) { return BLOCK_SNOW; }
   if (y &lt; SEA_LEVEL + 2.0) { return BLOCK_SAND; }
   return BLOCK_GRASS;
-}</code></pre>
+}</template>
+
+<div class="edits">
+  <span class="edits-label">Edits, applied to whichever world is running:</span>
+  <label><input type="checkbox" data-edit="pillar"> CSG pillar <span class="dim">smooth union, subtracted bore</span></label>
+  <label><input type="checkbox" data-edit="cave"> Carved hollow <span class="dim">a subtracted sphere in the ground</span></label>
+  <label><input type="checkbox" data-edit="waymark"> Waymark <span class="dim">a list of explicit voxels</span></label>
+  <p class="edits-note">
+    Each is one brush. They go in front of where you started; fly back if you have wandered
+    off. Unticking removes the brush and the terrain closes over it.
+  </p>
+</div>
+
+<h2>Install</h2>
+
+<pre><code>npm install https://wistrand.github.io/voxler/voxler-0.1.0.tgz</code></pre>
+
+<p>No TypeScript types yet.</p>
+
+<h2>The whole thing</h2>
+
+<p>
+  That is the whole of it. Three lines, and the rest of this page is optional.
+</p>
+
+<pre><code>import { Voxler } from "voxler";
+
+const voxler = await Voxler.create(canvas, { world: { code: myWorldWgsl } });
+voxler.start();</code></pre>
+
+<h2>A world that runs</h2>
+
+<p>
+  Press <strong>Hills</strong> and its source fills the editor: twenty lines, four octaves
+  of noise, sand in the hollows and snow on the tops.
+</p>
+
+
+
+<p>
+  No data was downloaded to draw that. The terrain is evaluated on the GPU from the source
+  above: full resolution near the camera, coarser cells out to the fog.
+</p>
+
+<h2>Something with more in it</h2>
+
+<p>
+  The second button loads a longer one: the same three functions, plus a mask deciding
+  where mountains rise, a sea filling everything below its level, and boulders scattered
+  over the ground. Read the scatter. Placing objects on a lattice is where worlds usually
+  go wrong.
+</p>
+
+
 
 <p>
   The comments in the scatter are rules, not preferences. Skip one and the lattice shows
@@ -397,10 +418,9 @@ voxler.edit.fillSphere(x, y, z, r, id);</code></pre>
 <h3>Field brushes: a shape folded into the SDF</h3>
 
 <p>
-  A CSG brush is a bounded primitive that joins the world's own field, on the GPU, before
-  anything is voxelized. It is not a decal on the surface: the field genuinely changes, so
-  the shape appears in the meshed near field, in the ray-marched far field and in the
-  ray-traced preview alike, and terrain closes around it.
+  A CSG brush is a bounded primitive that joins the world's field on the GPU, before
+  anything is voxelized. The field itself changes, so the shape appears in the near field,
+  the far field and the preview alike, and terrain closes around it.
 </p>
 
 <pre><code>import { BLEND_SUBTRACT } from "voxler";
@@ -549,13 +569,10 @@ const marker = voxler.brushes.add({
 
 <div class="note">
   <p style="margin:0">
-    <strong>Surviving regeneration is not surviving a reload.</strong> The journal and the
-    brush records live in memory for the session; nothing is written to disk or to
-    <code>localStorage</code>, and the engine will not do it for you. What it gives you is
-    the state to save: <code>voxler.brushes.records</code> and
-    <code>voxler.brushes.ops</code> are plain word buffers, and replaying
-    <code>brushes.add()</code> on the next load rebuilds the world you left. Persisting
-    that is the host's job, and it is an honest gap rather than a feature.
+    <strong>Surviving regeneration is not surviving a reload.</strong> Nothing is written
+    to disk. To keep edits, save <code>voxler.brushes.records</code> and
+    <code>voxler.brushes.ops</code>, which are plain word buffers, and replay
+    <code>brushes.add()</code> on the next load.
   </p>
 </div>
 
@@ -580,44 +597,69 @@ const marker = voxler.brushes.add({
 </main>
 
 <script type="module">
-  // The page runs the code it shows: each world is read out of its own <code> block, so
-  // the source above and the source that compiles cannot drift apart. The edits below are
-  // the brush API from further down the page, applied to whichever world is running.
+  // One editor, filled by whichever scene you run. The engine compiles what is in the box,
+  // so the source shown is always the source that ran.
   const status = document.getElementById("status");
   const stopButton = document.getElementById("stop");
   const canvas = document.getElementById("view");
   const runButtons = [...document.querySelectorAll("button[data-world]")];
   const editPanel = document.querySelector(".edits");
   const editBoxes = [...document.querySelectorAll("input[data-edit]")];
+  const source = document.getElementById("world-src");
+  const hud = document.getElementById("hud");
+  const hudToggle = document.getElementById("show-hud");
+  const editorWorld = document.getElementById("editor-world");
+  const editorMsg = document.getElementById("editor-msg");
 
-  // Spawns are above the surface of each world: the small one tops out near 90, the
-  // bigger one near 130 where the mountains are.
+  // Spawns are above the surface of each world.
   const WORLDS = {
-    small: { source: "world-src", spawn: [0, 110, 0] },
-    big: { source: "world-src-2", spawn: [0, 150, 0] },
+    small: { template: "src-small", spawn: [0, 110, 0], label: "Hills" },
+    big: { template: "src-big", spawn: [0, 190, 0], label: "Mountains, sea and boulders" },
   };
+  for (const spec of Object.values(WORLDS)) {
+    // A <template> keeps its text out of the page and out of the editor until asked for.
+    spec.source = document.getElementById(spec.template).innerHTML
+      .replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&");
+  }
 
   let voxler = null;
-  let api = null; // the module, loaded once
-  let anchor = null; // where the edits go in the world currently running
-  const applied = new Map(); // edit name -> brush ids
+  let api = null;
+  let loaded = null; // which world the editor is showing
+  let anchor = null;
+  const applied = new Map();
 
   function show(text) {
     status.textContent = text;
     status.hidden = text === "";
   }
 
+  function complain(text) {
+    editorMsg.textContent = text ?? "";
+    editorMsg.hidden = !text;
+  }
+
   function busy(on) {
     for (const b of runButtons) b.disabled = on;
+    document.getElementById("run-edit").disabled = on;
   }
 
   function editsEnabled(on) {
     editPanel.setAttribute("aria-disabled", String(!on));
   }
 
+  // `innerText`, not `textContent`: an editable block gains elements when you press
+  // Enter, and `textContent` would run the lines together.
+  const editorSource = () => source.innerText;
+
+  function load(name) {
+    loaded = name;
+    source.innerText = WORLDS[name].source;
+    editorWorld.textContent = WORLDS[name].label;
+    complain(null);
+  }
+
   const CHUNK = 32;
 
-  // A voxel's block id, or null when its chunk is not resident yet.
   function blockAt(v, x, y, z) {
     const cx = Math.floor(x / CHUNK), cy = Math.floor(y / CHUNK), cz = Math.floor(z / CHUNK);
     const index = ((y - cy * CHUNK) * CHUNK + (z - cz * CHUNK)) * CHUNK + (x - cx * CHUNK);
@@ -628,23 +670,18 @@ const marker = voxler.brushes.add({
     }
   }
 
-  // The surface under a column, so a brush sits on the ground rather than in the air. The
-  // worlds here differ by fifty voxels in height, so this cannot be a constant.
-  //
   // A chunk that is still arriving can read as solid, which once put the whole set of
   // edits sixty voxels up in the sky. So a surface only counts with air directly above it,
-  // and the answer has to come back the same twice a second apart before it is used.
+  // and the answer has to come back the same twice, half a second apart.
   function groundUnder(v, x, z, from) {
     for (let y = from; y > from - 220; y--) {
       const here = blockAt(v, x, y, z);
       if (here === null || here === 0) continue;
-      const above = blockAt(v, x, y + 1, z);
-      if (above === 0) return y;
+      if (blockAt(v, x, y + 1, z) === 0) return y;
     }
     return null;
   }
 
-  // In front of where the camera started, which is looking along -Z.
   async function findAnchor(v) {
     const x = Math.round(v.camera.worldPosition(0));
     const z = Math.round(v.camera.worldPosition(2)) - 44;
@@ -659,10 +696,58 @@ const marker = voxler.brushes.add({
     return last === null ? null : [x, last, z];
   }
 
+  // A small stats readout over the view, off by default. It is driven by the `afterFrame`
+  // hook and refreshed four times a second: `refreshStats()` walks the near field's free
+  // lists, which is fine for an overlay and not fine every frame, and the cull counters it
+  // reports come back from the GPU a few frames late whatever the tick.
+  const HUD_INTERVAL_MS = 250;
+  let hudFrames = 0;
+  let hudAt = 0;
+
+  function amount(n) {
+    if (n >= 1e9) return `${(n / 1e9).toFixed(1)}G`;
+    if (n >= 1e6) return `${(n / 1e6).toFixed(1)}M`;
+    if (n >= 1e3) return `${(n / 1e3).toFixed(1)}k`;
+    return String(n);
+  }
+
+  function updateHud(now) {
+    hudFrames++;
+    if (hudToggle.checked === false || voxler === null) return;
+    if (now - hudAt < HUD_INTERVAL_MS) return;
+    const fps = hudAt === 0 ? 0 : (hudFrames * 1000) / (now - hudAt);
+    hudAt = now;
+    hudFrames = 0;
+    const near = voxler.renderer?.near.refreshStats();
+    // Voxels is what the resident chunks stand for, not what anything stores: a chunk of
+    // open air or solid rock is one value, which is why a few hundred million of them fit
+    // in a few tens of megabytes.
+    const chunks = voxler.store.count;
+    const lines = [
+      `${fps.toFixed(0)} fps`,
+      `chunks  ${amount(chunks)}`,
+      `voxels  ${amount(chunks * api.CHUNK_VOLUME)}`,
+    ];
+    if (voxler.mesher) lines.push(`meshes  ${amount(voxler.mesher.stats.meshes)}`);
+    if (near) {
+      lines.push(`drawn   ${amount(near.visibleClusters)} / ${amount(near.clusters)}`);
+      lines.push(`quads   ${amount(near.realQuads)}`);
+    }
+    if (voxler.brushes.count > 0) lines.push(`brushes ${voxler.brushes.count}`);
+    hud.textContent = lines.join("\n");
+  }
+
+  hudToggle.addEventListener("change", () => {
+    hud.hidden = !hudToggle.checked;
+    hudAt = 0;
+    hudFrames = 0;
+    if (hudToggle.checked) hud.textContent = "measuring";
+  });
+
   const block = (name) => api.BLOCKS.find((b) => b.name === name).id;
 
-  // One entry per checkbox. Each returns the brush ids it added, so unticking can take
-  // exactly those back out.
+  // One entry per checkbox. Each returns the brush ids it added, so unticking takes back
+  // exactly those.
   const EDITS = {
     pillar: (v, [x, y, z]) => [
       v.brushes.add({
@@ -720,16 +805,20 @@ const marker = voxler.brushes.add({
     box.addEventListener("change", () => (box.checked ? applyEdit(box.dataset.edit) : removeEdit(box.dataset.edit)));
   }
 
-  async function run(which) {
-    const spec = WORLDS[which];
-    if (!spec) return;
+  // Runs whatever is in the editor. `spawn` comes from the world that was loaded, because
+  // an edited world is still that world's shape.
+  async function run() {
+    if (loaded === null) return;
+    const spec = WORLDS[loaded];
     busy(true);
     editsEnabled(false);
+    complain(null);
     applied.clear(); // the brushes went with the engine that held them
     anchor = null;
     if (voxler) {
       voxler.dispose();
       voxler = null;
+      globalThis.voxler = null;
       stopButton.hidden = true;
     }
     show("loading the engine");
@@ -737,7 +826,7 @@ const marker = voxler.brushes.add({
       api ??= await import("./play/voxler.js");
       show("compiling shaders, a few seconds on a first load");
       voxler = await api.Voxler.create(canvas, {
-        world: { code: document.getElementById(spec.source).textContent, spawn: spec.spawn },
+        world: { code: editorSource(), spawn: spec.spawn },
         // A page is not a full-screen demo: a shorter reach and fewer workers leave the
         // rest of the tab responsive, and the debug axis cross is not something an
         // embedded viewer wants in the corner.
@@ -747,31 +836,43 @@ const marker = voxler.brushes.add({
       }, {
         onCompiling: (left) => show(left.length ? `compiling ${left.join(" ")}` : ""),
         onUnsupported: (message) => show(message),
-        onError: (message) => console.warn("[voxler]", message),
+        // A world that will not compile is the normal case once the block is editable, so
+        // the message goes under the editor rather than into the console.
+        onError: (message) => {
+          console.warn("[voxler]", message);
+          complain(message);
+        },
+        afterFrame: (now) => updateHud(now),
       });
       voxler.start();
       // Reachable from the console, so everything further down this page can be tried on
       // the world above without writing a page of your own.
       globalThis.voxler = voxler;
       stopButton.hidden = false;
-      canvas.scrollIntoView({ block: "center", behavior: "smooth" });
-      // The ground has to be there before anything can be stood on it.
       anchor = await findAnchor(voxler);
       if (anchor === null) {
-        show("the ground never settled; reload and try again");
+        show("the ground never settled; try running it again");
       } else {
         editsEnabled(true);
         for (const box of editBoxes) if (box.checked) applyEdit(box.dataset.edit);
       }
     } catch (err) {
-      show(String(err && err.message ? err.message : err));
+      complain(String(err && err.message ? err.message : err));
+      show("that world did not compile. The error is under the editor.");
     }
     busy(false);
   }
 
   for (const button of runButtons) {
-    button.addEventListener("click", () => run(button.dataset.world));
+    button.addEventListener("click", () => {
+      load(button.dataset.world);
+      run();
+    });
   }
+  document.getElementById("run-edit").addEventListener("click", () => run());
+  document.getElementById("reset-edit").addEventListener("click", () => {
+    if (loaded !== null) load(loaded);
+  });
 
   stopButton.addEventListener("click", () => {
     if (!voxler) return;
@@ -782,10 +883,17 @@ const marker = voxler.brushes.add({
     anchor = null;
     stopButton.hidden = true;
     editsEnabled(false);
+    hud.textContent = "";
     show("disposed: workers terminated and the device destroyed. Pick a world to build another.");
   });
 
   editsEnabled(false);
+
+  // Hills is loaded and running before anyone presses anything: the view is the first
+  // thing on the page, and an empty canvas over a Run button is a worse first look than a
+  // world. The other button swaps it, and the editor already holds the source either way.
+  load("small");
+  run();
 </script>
 </body>
 </html>

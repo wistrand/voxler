@@ -213,10 +213,29 @@ export class Voxler {
     }
   }
 
+  // Throws if the engine could not be built: no WebGPU, no adapter, or a world that would
+  // not compile. The detail has already gone to `onError`, and the throw is so a caller
+  // handing in a world someone just typed does not get back an object that will never draw
+  // anything. `dispose()` has already run on the way out, so nothing is left holding a
+  // device or a worker.
   static async create(canvas: HTMLCanvasElement, options: VoxlerOptions, hooks: VoxlerHooks = {}): Promise<Voxler> {
     const voxler = new Voxler(canvas, options);
     voxler.hooks = hooks;
-    await voxler.init();
+    let failure: string | null = null;
+    const onError = hooks.onError;
+    voxler.hooks = {
+      ...hooks,
+      onError: (message) => {
+        failure ??= message; // the first one is the cause; the rest are usually its wake
+        onError?.(message);
+      },
+    };
+    const ok = await voxler.init();
+    voxler.hooks = hooks;
+    if (!ok) {
+      voxler.dispose();
+      throw new Error(failure ?? "voxler could not start");
+    }
     return voxler;
   }
 
@@ -414,10 +433,13 @@ export class Voxler {
         this.hooks.onCompiling?.(WORLD_STAGES.filter((name) => renderer.startup[name] === undefined));
       }, 200);
     }
-    await renderer.worldReady;
+    const worldOk = await renderer.worldReady;
     if (this.compiling !== 0) clearInterval(this.compiling);
     this.compiling = 0;
     if (gen !== this.generation) return false;
+    // A world that would not compile leaves a renderer that draws a sky over nothing.
+    // Better to fail here, where `create()` turns it into a throw carrying the message.
+    if (!worldOk) return false;
     this.hooks.onCompiling?.([]);
 
     this.mesher?.remeshAll(); // a rebuilt renderer starts with no meshes
@@ -559,6 +581,7 @@ export { ChunkStore } from "./world/store.ts";
 export { ChunkStreamer } from "./world/streaming.ts";
 export { MeshScheduler } from "./world/mesh-scheduler.ts";
 export { WorkerPool } from "./workers/pool.ts";
+export { CHUNK_SIZE, CHUNK_VOLUME } from "./world/coords.ts";
 export { BLOCKS, type BlockType } from "./world/blocks.ts";
 // Editing. The blend and primitive constants are part of the surface: a field brush is
 // useless without a way to say "subtract this sphere".

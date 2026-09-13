@@ -76,6 +76,10 @@ export class FlyControls {
   constructor(canvas: HTMLCanvasElement, camera: FlyCamera) {
     this.canvas = canvas;
     this.camera = camera;
+    // A canvas cannot hold focus unless it is given a tab index. Without one, clicking the
+    // view leaves focus wherever it was, and the keys keep going to the editor you just
+    // left. Left alone if the host has set its own.
+    if (!canvas.hasAttribute("tabindex")) canvas.tabIndex = 0;
     const on = <T extends Event>(
       target: EventTarget,
       type: string,
@@ -93,7 +97,13 @@ export class FlyControls {
     on<PointerEvent>(canvas, "pointermove", (e) => this.onPointerMove(e));
     on<PointerEvent>(canvas, "pointerup", (e) => this.onPointerUp(e));
     on<PointerEvent>(canvas, "pointercancel", (e) => this.onPointerUp(e));
-    on<WheelEvent>(canvas, "wheel", (e) => this.onWheel(e), { passive: true });
+    // Not passive, and the default is prevented: the wheel flies the camera, and a canvas
+    // embedded in a page would otherwise scroll the page at the same time, which reads as
+    // the view fighting you.
+    on<WheelEvent>(canvas, "wheel", (e) => {
+      e.preventDefault();
+      this.onWheel(e);
+    }, { passive: false });
   }
 
   // Every listener off, and the keys released so a camera someone else is driving does
@@ -143,8 +153,27 @@ export class FlyControls {
     );
   }
 
+  // Whether a key press is ours. The listeners are on the window rather than the canvas,
+  // because a key released after the pointer has left the view still has to be released,
+  // and because a full-page view is never focused until someone clicks it. So the test is
+  // not "is the canvas focused" but "is anything else focused": a page that embeds the
+  // view puts a text field, a checkbox or an editable block next to it, and WASD typed
+  // into one of those must reach it rather than fly the camera.
+  private handlesKeys(): boolean {
+    const active = globalThis.document?.activeElement;
+    return active === null || active === undefined || active === this.canvas ||
+      active === globalThis.document?.body;
+  }
+
   private onKey(e: KeyboardEvent, down: boolean): void {
     if (e.ctrlKey || e.metaKey || e.altKey) return; // leave browser shortcuts alone
+    // A key going down elsewhere is not ours. A key coming up always is: it may have gone
+    // down here and been released after the focus moved, and a direction left held down
+    // flies the camera away on its own.
+    if (down && !this.handlesKeys()) {
+      this.releaseKeys();
+      return;
+    }
     switch (e.code) {
       case "KeyW":
         this.forward = down;
@@ -205,6 +234,10 @@ export class FlyControls {
     this.dragY = e.clientY;
     this.dragRate = e.pointerType === "mouse" ? MOUSE_RADIANS_PER_PX : TOUCH_RADIANS_PER_PX;
     this.canvas.setPointerCapture(e.pointerId);
+    // The default is prevented above, which would also have stopped the click moving
+    // focus, so take it deliberately: clicking the view is how you give it the keyboard
+    // back after typing somewhere else.
+    this.canvas.focus({ preventScroll: true });
   }
 
   private onPointerMove(e: PointerEvent): void {

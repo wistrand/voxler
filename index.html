@@ -12,6 +12,9 @@
   body { display: grid; place-items: center; }
   canvas { display: block; width: 100vw; height: 100vh; touch-action: none; user-select: none; cursor: grab; }
   canvas:active { cursor: grabbing; }
+  /* It is focusable so it can take the keyboard back from a text field; the ring adds
+     nothing to a picture. */
+  canvas:focus { outline: none; }
   /* `?size=` renders at a fixed size, and the window is rarely that shape. Stretching
      one to the other gives the frame a pixel that is not square, so the picture's own
      aspect follows the window: a circle is an ellipse, and by how much depends on how

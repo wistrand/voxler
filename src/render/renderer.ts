@@ -587,7 +587,13 @@ export class Renderer {
     this.pipelines = { sky, grid, gizmo };
     // Not the preview: it is optional, it is the slowest thing here to compile, and
     // streaming waits on this.
-    this.worldReady = Promise.all([voxelizerReady, nearReady, farReady, drawTestDone]).then(() => true);
+    // Resolves false if any stage failed. It used to resolve `true` whatever happened,
+    // which meant a world that would not compile started an engine that drew a sky over
+    // nothing and reported success: the errors went to `report` and the caller was told
+    // the world was ready. A host compiling a world someone just typed needs the answer.
+    this.worldReady = Promise.all([voxelizerReady, nearReady, farReady, drawTestDone]).then(
+      ([voxelizer, near, far]) => voxelizer !== false && near !== false && far !== false,
+    );
     if (this.previewWanted) this.ensurePreview();
     return true;
   }

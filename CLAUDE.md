@@ -511,6 +511,13 @@ away here:
 - Tests are `*_test.ts` and benchmarks `*_bench.ts`, next to the code they cover.
 - Never use pointer lock. Camera look is drag-to-look with pointer capture, and the
   overlay receives pointer events so its text can be selected and copied.
+- The camera's keys are the window's, not the canvas's, but only when nothing else has
+  focus. `FlyControls` listens on the window (a key released after the pointer has left
+  the view still has to be released, and a full-page view is never focused until someone
+  clicks it), and ignores a key going down while a text field, a checkbox or an editable
+  block holds focus. Without that, WASD typed into a page that embeds the view flies the
+  camera instead of reaching the field. A key coming up is always taken, or a direction
+  stays held. The canvas is given a `tabindex` so clicking it takes the keyboard back.
 - Take a pointer's position from `clientX`/`clientY` against `getBoundingClientRect()`,
   never from `offsetX`/`offsetY`: the two disagree under browser zoom
   ([gotchas.md](agent_docs/gotchas.md) "`offsetX` on a pointer event").
