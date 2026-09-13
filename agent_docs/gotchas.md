@@ -1011,3 +1011,43 @@ Two other things the same measurement taught:
   1.5 took the far-field build's p99 from 19.2 ms to 13, and the only thing lost is that
   ferns no longer cast their own shadows, since shadow rays march those bricks.
   `src/worlds/forest_test.ts` holds the gate between the two numbers.
+
+### GPU pass timings do not mean the same thing on an Apple GPU
+
+The same flyover, 1080p, Chrome 152 on both machines:
+
+| pass         | Arc B390, Linux | M3, macOS |
+|--------------|-----------------|-----------|
+| `gpu.near.a` | 2.10            | 2.88      |
+| `gpu.far`    | 3.08            | 5.57      |
+| `gpu.near.t` | 0.07            | 5.83      |
+| `gpu.main`   | 0.07            | 6.23      |
+| sum of p50s  | 6.49            | 21.76     |
+
+The translucent pass draws sixty clusters and `main` draws a fullscreen triangle and a
+blit. Neither is six milliseconds of work on an M3, and the giveaway is the sum: 21.76 ms
+of GPU per frame in a run that held a 16.66 ms interval and **missed zero frames**. Apple's
+GPU is tile-based and defers fragment work to the end of a pass, so the timestamps around a
+pass do not bracket that pass's own work the way they do on an immediate-mode GPU.
+
+So: **compare a pass against itself across a change on one machine, never across machines,
+and never add the passes up on Apple.** What does carry across is the frame interval, the
+missed-frame count, `stream.holes` and the CPU times, which are measured on the CPU.
+
+### Quiet is not the same as arrived
+
+`benchReady()` waited for the world by asking whether anything was outstanding: no queued
+clipmap slabs, no streaming holes. On the dev machine that worked, because the pipelines
+take two seconds to compile and by the time they land the streamer is busy. On a machine
+with a warm shader cache they landed in 140 ms, and at 140 ms there were no holes because
+nothing had been *asked for* yet, and no queued slabs because the clipmap had not been told
+where the camera was. The gate walked straight through and the first run measured a world
+still arriving: `readyMs` 140, nine missed frames, against zero for the second run.
+
+Every check in a readiness gate has to be a positive one. It now asks that a slab has been
+built and chunks are resident, as well as that nothing is queued, requested or compressing.
+On the Mac that moved `readyMs` from 140 to 6469 and the first run's misses from 9 to 0; on
+the dev machine, from 2052 to 6705 and from 52 to 31.
+
+**A gate tuned on one machine is tuned to that machine's timings.** This one only showed up
+because the same build ran somewhere else.

@@ -142,7 +142,7 @@ today `src/gpu/`, `src/render/`, `src/camera/`, `src/util/`, `src/debug/`,
 | `src/util/`      | math, ring buffers, timers                                     |
 | `src/debug/`     | the debug overlay (caps, stats, camera, errors), the on-screen panel (frame rate, switches, compile progress) and frame `Stats` |
 | `src/bench/`     | benchmark scenes, runner, session                              |
-| `bench/results/` | dated benchmark result files (generated, committed)            |
+| `bench/results/` | dated benchmark result files (generated, gitignored, local to a machine) |
 | `index.html`     | page shell, copied to `dist/` by the build                     |
 | `build.ts`       | esbuild bundling (`buildRelease()`, `watch()`)                 |
 | `serve.ts`       | static server for `dist/` with COOP/COEP headers               |
@@ -173,6 +173,15 @@ Tailscale IP, and open the `ts.net` name. Certs last 90 days.
 
 Browser checks: `.mcp.json` configures `chrome-devtools-mcp`, so a session with
 that MCP server can open the page, read the overlay, and run benchmarks itself.
+Another machine on the tailnet can be driven too, which is how the Apple silicon row in
+the performance table was measured: ssh to it, start a *second* Chrome with its own
+profile and nothing else (`open -na "Google Chrome" --args --user-data-dir=/tmp/... `
+`--remote-debugging-port=9222`, which keeps the flag-free-profile invariant and leaves the
+one the user is looking at alone), tunnel the port back (`ssh -f -N -L 9223:127.0.0.1:9222
+<host>`) and speak the DevTools protocol to it over a WebSocket. The MCP server here
+launches its own local Chrome and cannot be pointed at that one mid-session. A bench run
+on the far machine POSTs its result to this one like any other, so it lands in
+`bench/results/` with its own browser string.
 Always open the `ts.net` hostname, never the Tailscale IP: the certificate names
 the hostname, and an IP URL fails validation in a fresh profile. The server
 launches its own Chrome with an isolated profile (no flags, per the
@@ -261,9 +270,12 @@ Benchmarks: `?bench=<flyover|spin|teleport|cave|grove>&runs=n` on the dev server
 (`grove` walks under the forest's canopy and wants `?world=forest`). Renders at
 1920x1080 unless `?size` is given, stops the loop when done, and saves one JSON per
 run to `bench/results/<scene>.<UTC timestamp>.<browser>.json` (dated on purpose;
-never rename or edit them). Compare CPU and GPU times, not the vsync-capped frame
-interval. A perf claim cites two result files, before and after. Scene paths are
-offsets from the world's spawn point, so always check the spawn still stands on the
+never rename or edit them). `bench/` is gitignored, so the files are local to whichever
+machine produced them and nobody else can open the one a claim names. Compare CPU and GPU
+times, not the vsync-capped frame interval. **A perf claim carries the numbers themselves,
+in the doc, with the two result files named beside them as a local pointer.** A claim that
+is only a pair of filenames is unreadable to anyone but the machine it was made on.
+Scene paths are offsets from the world's spawn point, so always check the spawn still stands on the
 ground after changing a world's terrain: a stale one runs the whole scene underground
 and every number it produces is for an empty frame
 ([gotchas.md](agent_docs/gotchas.md)). `stream.holes` in each result counts chunks
@@ -343,7 +355,8 @@ near the camera that should be resident but weren't (0 means streaming kept up).
 - Shadow rays read the far field's clipmap, so shadows exist only where it is built:
   `?far=0` turns them off with it, and nothing outside the clipmap's window casts one.
 - A change presented as a performance improvement includes before and after numbers
-  from the bench harness.
+  from the bench harness, written out where the claim is. `bench/` is gitignored, so the
+  result files are local to one machine: naming them is a pointer, never the evidence.
 - Anything that adapts to measured cost is off during a bench run. A setting that moves
   under the measurement makes two results incomparable, which is worse than the setting
   being wrong.
@@ -384,7 +397,7 @@ species, falls and a different scatter and its spawn moved to 188
 | ------------------------------------------ | --------------------------------------- | ----------------------------------------------- |
 | Frame time, dev machine (Arc B390, 120 Hz) | under 8.3 ms (hold 120 Hz)              | flyover misses 46 frames of 1151 since the far field went full resolution; spin, cave and teleport held it when last run (interval p99 8.34); the grove misses 12 of 1425 |
 | GPU per frame, flyover                     | under 8.3 ms                            | 6.3 ms (sum of pass p50s, 20:15 run; 4.0 before the full-resolution march); spin 4.5, cave 3.8, teleport 2.5, all from 18:35 |
-| Frame time, integrated GPU (M1, Iris Xe)   | under 16.7 ms                           | unmeasured, no hardware                         |
+| Frame time, integrated GPU (Apple silicon) | under 16.7 ms                           | met: an M3 on macOS 26.4.1 (Chrome 152, `apple / metal-3`) holds its 60 Hz panel with 0 missed frames in both flyover and grove; CPU frame 1.18 and 0.47 p50. Its pass timings are not comparable to the rows above ([gotchas.md](agent_docs/gotchas.md) "GPU pass timings do not mean the same thing on an Apple GPU") |
 | Frame time, discrete GPU                   | under 7 ms                              | unmeasured, no hardware                         |
 | Main-thread CPU per frame                  | under 2 ms, flat in resident chunks     | p50 0.34-1.69; p99 0.70-5.26, over in scenes that stream hard |
 | Near-field meshed radius                   | 16 chunks (512 voxels) horizontally     | as configured (`?streamRadius`)                 |

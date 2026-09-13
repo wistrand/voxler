@@ -637,9 +637,18 @@ const BENCH_READY_TIMEOUT_MS = 90_000;
 // still produces a result, and `readyMs` in the result says how long it took.
 function benchReady(renderer: Renderer, now: number): boolean {
   if (benchWaitedMs >= 0) return true;
+  const s = streamer.stats;
+  // "Nothing outstanding" is not the same as "everything arrived": on the first frames
+  // there are no holes because nothing has been asked for yet, and no queued slabs because
+  // the clipmap has not been told where the camera is. On a machine whose shader cache is
+  // warm the pipelines land in a tenth of a second and a gate that only asks for quiet
+  // walks straight through, which is what a 140 ms `readyMs` on the Mac turned out to be
+  // ([gotchas.md](agent_docs/gotchas.md) "A bench that starts before the world is built").
+  // So every check here is a *positive* one: something arrived, and nothing is still on
+  // its way.
   const ready = WORLD_STAGES.every((name) => renderer.startup[name] !== undefined) &&
-    renderer.far.stats.queued === 0 &&
-    (!streaming || streamer.stats.holes === 0);
+    renderer.far.stats.slabs > 0 && renderer.far.stats.queued === 0 &&
+    (!streaming || (s.resident > 0 && s.requested === 0 && s.compressing === 0 && s.holes === 0));
   if (ready || now >= BENCH_READY_TIMEOUT_MS) {
     benchWaitedMs = Math.round(now);
     hud.status(""); // or the waiting line stays up for the whole run

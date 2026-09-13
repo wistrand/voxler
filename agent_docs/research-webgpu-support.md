@@ -166,6 +166,24 @@ Notes:
 - The Android row was reported as "Linux" by the first version of the caps report
   (UA parsing bug, fixed); the platform was Android.
 
+
+## Measured, not inferred: Apple silicon
+
+2026-09-13. Chrome 152.0.7977.83 on macOS 26.4.1, Apple M3, driven over the tailnet from
+the dev machine (CLAUDE.md "Browser checks"). WebGPU is on by default, the page is
+cross-origin isolated, and the adapter reports `apple / metal-3` with
+`timestamp-query`, `shader-f16` and `subgroups` available, so nothing in the engine's
+optional-feature path is exercised differently there. Seven workers against fifteen on the
+dev machine.
+
+It runs the whole engine at 1080p with no errors and holds its 60 Hz panel with zero
+missed frames in both the terrain flyover and the forest grove. The per-pass GPU timings it
+reports are not comparable to an immediate-mode GPU's
+([gotchas.md](gotchas.md) "GPU pass timings do not mean the same thing on an Apple GPU").
+
+Safari itself is still unmeasured: this was Chrome on macOS, which is the same engine as
+the dev machine's and says nothing about WebKit's WebGPU.
+
 ## Sources
 
 - gpuweb implementation status: https://github.com/gpuweb/gpuweb/wiki/Implementation-Status
