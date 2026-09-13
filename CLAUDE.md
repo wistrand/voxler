@@ -70,8 +70,10 @@ The living world is done: emissive blocks, wind in the vertex stage, the forest 
 program, block light flood filled in the mesh job and baked per quad corner, per-world
 sky and lighting presets (`src/render/sky.ts`) including a night with a moon, and
 shadows marched against the far field's clipmap. The forest has grown since: four tree
-species over three leaf greens, mountains with a rock band and snow on top, waterfalls
-where a gorge and a steep step agree, jellyfish in the water, and birds over it. The birds
+species over three leaf greens, mountains with a rock band and snow on top, undergrowth
+that climbs past the tree line as alpine scrub, ferns thickest down at the waterline,
+waterfalls where a gorge and a steep step agree, jellyfish in the water, and birds over
+it. The birds
 are the one thing in the engine that is neither in the world SDF nor in a chunk: they
 travel, and a chunk is voxelized once, so they are drawn from state a compute pass steps
 each frame (`src/render/birds-*.wgsl`, six flocks of boids and four hunters working them).

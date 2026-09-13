@@ -981,3 +981,33 @@ Three things were needed before it held, and the first two on their own did not:
 Checked by reading the flock back and asking the *chunk store* for the ground, which is a
 different source from the clipmap the step asks: 1776 samples over twenty seconds, none
 below the surface, tightest clearance 1.1 voxels.
+
+### A bound is paid for everywhere, a shape only where it stands
+
+Ferns grow larger by the water, which sounds free: most of the world is not by water, so
+most ferns stay the size they were. It is not free, because the *bound* has to be built for
+the biggest a fern in that cell could be, and the bound is tested on every sample near
+every fern whether or not the fern turns out to be large. At half again the reach it covers
+more than twice the area, and everything behind it — the density field, the shore read, the
+five bezier tubes — runs on twice as many samples.
+
+Measured on the grove: `gpu.far.build` 4.98 ms p50 to 8.85, the GPU sum 8.5 ms to 14.4, and
+the interval dropped a vsync tier from 8.34 to 16.66. At a fifth again (0.22) it is back
+inside the frame. **Most of what reads as a lush bank is the density and where the plant is
+allowed to stand, not its size**, and those two are behind the bound where they cost
+nothing extra.
+
+Two other things the same measurement taught:
+
+- **Order the gates cheapest-first, and make the cheap one conservative.** The fern's
+  density is one octave and its shore read is three plus a conditional land read. Testing
+  the density against the *best* bonus any bank could give, then the shore, then the exact
+  test, keeps the shore read off every cell that could not stand anywhere.
+- **`sample_footprint` decides who pays.** The voxelizer samples at 1 and the far field's
+  finest cell is 2 voxels, so a gate anywhere between the two puts a feature in the meshes
+  and in no brick. Undergrowth was gated at 3.3 and so lived in the finest clipmap level —
+  whose window is ±256 voxels, entirely inside the near field's 512-voxel meshed radius, so
+  every fern in a brick sat behind a mesh that was already drawing it. Moving the gate to
+  1.5 took the far-field build's p99 from 19.2 ms to 13, and the only thing lost is that
+  ferns no longer cast their own shadows, since shadow rays march those bricks.
+  `src/worlds/forest_test.ts` holds the gate between the two numbers.

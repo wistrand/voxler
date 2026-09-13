@@ -256,6 +256,25 @@ frame counters use, which is what keeps a `mapAsync` out of the frame path. The 
 trails fifty voxels back, because a bird's flock-mates sit within twenty of it and a
 closer camera flies into the middle of them.
 
+**Plants up the mountain, and ferns down to the water.** The undergrowth used to stop dead
+at the tree line, which left everything above it bare rock, and every plant thinned out
+near water, which left the banks bare sand. Both are now the other way round. Ferns and
+fungus climb past the wood on a ramp rather than a contour, each on its own ceiling
+(`SHROOM_LINE`, `ALPINE_LINE`) with the density falling to nothing before the cut that
+saves the work; past `SCRUB_LINE` a fern is dithered per cell into alpine scrub, the same
+shape in sage rather than green. And a fern is the one plant here that wants wet feet, so
+it stands closer to the water than anything else (`FERN_DRY` against `UNDER_DRY`) and there
+are more of them there.
+
+What that cost, and what paid for it: the plants are about 3% more quads and the first cut
+took the grove out of 120 Hz outright, because a fern that grows by the water has to be
+*bounded* for that size everywhere ([gotchas.md](gotchas.md) "A bound is paid for
+everywhere"). With the size bonus cut to a fifth, the gates ordered cheapest-first, and
+undergrowth moved out of the clipmap where it was never visible, the grove holds 8.34 ms
+again with 8 to 15 frames missed of 1425, against 12 before; `gpu.far.build` is noisy across
+runs at 3.8 to 7.4 p50 against 4.98, and its p99 is better than it was, 10 to 17 against
+19.2.
+
 **Four species and three greens.** Birch joined the broadleaf, conifer and ancient: a
 slender white trunk with the dark dashes, a bare length of it under a light airy crown,
 and it likes the low open ground where the conifers do not. The canopy has three leaf

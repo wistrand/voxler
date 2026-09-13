@@ -58,6 +58,32 @@ const TREE_DRY = 1.5 * S;
 const TREE_SHORE_BAND = 5.0 * S;
 const UNDER_DRY = 0.5 * S;
 const UNDER_SHORE_BAND = 2.5 * S;
+// A fern is the one plant here that wants wet feet, so it comes right down to the bank
+// where a mushroom stands back from it.
+const FERN_DRY = 0.0;
+const FERN_SHORE_BAND = 1.0 * S;
+// How far from the water a fern still counts as being by it, and what being by it is
+// worth: more of them, and bigger. A fern on a bank is a different plant from one in the
+// dry wood, and the size is what carries that at a distance.
+const FERN_WET_REACH = 11.0 * S;
+const FERN_WET_DENSITY = 0.30;
+// Small on purpose. Every fern's bound has to be built for the biggest it could be, and
+// a fern is the densest scatter in the world: at half again the reach the bound covers
+// more than twice the area, which took the far-field build from 5 ms to 8.9 and the grove
+// out of 120 Hz. Most of what reads as a lush bank is the density and the waterline, not
+// the size (gotchas.md "A bound is paid for everywhere, a shape only where it stands").
+const FERN_WET_SIZE = 0.22;
+// Where the undergrowth gives out. The wood stops at the tree line but the ground does
+// not: there is a stretch of alpine growth over it, thinning the whole way, before the
+// bare rock and the snow. Every density here ramps to nothing before the cut that saves
+// the work, so the cut itself is never a line anyone can see.
+const ALPINE_LINE = 86.0 * S;
+// Where a fern turns into alpine scrub: smaller, tougher, grey-green instead of the
+// wood's deep green. One shape, two climates, and the switch is dithered per cell so the
+// change of clothes is not a contour either.
+const SCRUB_LINE = 56.0 * S;
+// Fungus climbs a little past the wood and no further: it lives on what the trees drop.
+const SHROOM_LINE = 70.0 * S;
 // Snow well above the tree line, not just above it: the band between is bare rock, and
 // with summits hundreds of voxels over the ridges there is room for it to read as a
 // mountainside rather than as a stripe.
@@ -72,7 +98,12 @@ const SOIL = 4.0 * S; // dirt above stone
 // one that sums noise. The undergrowth only survives in the finest level's cells, where
 // it is still a voxel or two across; the canopies carry the forest out to about a
 // thousand voxels, past which fog has most of it anyway.
-const UNDERGROWTH_FOOTPRINT = 1.2 * S;
+// Undergrowth is near-field only, and this number is what says so: the voxelizer samples
+// at a footprint of 1 and the far field's finest cell is 2 voxels, so anything between the
+// two is in the meshes and in no brick. A fern is nine voxels across; past the meshed
+// radius it is under a pixel, and the near field wins every chunk it draws anyway, so what
+// the bricks held was detail nobody saw and the brick build paid for it on every slab.
+const UNDERGROWTH_FOOTPRINT = 1.5;
 // Trees survive to the far field's second level and no further. Three species with
 // carved canopies cost several times what the first cut did, and the far field samples
 // this world once per level: at 3.0 * S the trees reached the third level and the grove
@@ -708,10 +739,13 @@ const SHROOM_CLUSTER = 3u;
 // Mushrooms: clumps of small glowing caps, and the occasional giant one. The colour is
 // the cell's, so a clump shares a species.
 fn mushrooms(p: WorldPoint, ground: f32) -> vec2f {
-  if (ground > TREE_LINE) {
-    return vec2f(1e9, 0.0); // undergrowth stops where the wood does
+  if (ground > SHROOM_LINE) {
+    return vec2f(1e9, 0.0);
   }
   let y = f32(p.cell.y) + p.frac.y;
+  // Fungus follows the leaf litter, so it gives out sooner than the scrub does and at its
+  // own rate, thinning from under the tree line rather than stopping at it.
+  let alpine = 1.0 - smoothstep(TREE_LINE * 0.85, SHROOM_LINE, ground);
   var best = vec2f(1e9, 0.0);
   for (var i = -1; i <= 1; i++) {
     for (var j = -1; j <= 1; j++) {
@@ -745,7 +779,7 @@ fn mushrooms(p: WorldPoint, ground: f32) -> vec2f {
       // centre puts the patches on the lattice, and a shore read at the sample point
       // cuts a clump off along the waterline instead of standing it back from one.
       let base = plant_base(id, SHROOM_CELL, jitter);
-      if (r.x > 0.10 + 0.85 * patch_density(base, 8u)) {
+      if (r.x > (0.10 + 0.85 * patch_density(base, 8u)) * alpine) {
         continue;
       }
       if (shore_fade(shore_dry(base, ground), UNDER_DRY, UNDER_SHORE_BAND) < cell_random(id, 18u).x) {
@@ -857,10 +891,14 @@ fn giants(p: WorldPoint, ground: f32) -> vec2f {
 
 // Ferns: a few fronds arcing out of one point.
 fn ferns(p: WorldPoint, ground: f32) -> vec2f {
-  if (ground > TREE_LINE) {
-    return vec2f(1e9, 0.0); // undergrowth stops where the wood does
+  if (ground > ALPINE_LINE) {
+    return vec2f(1e9, 0.0); // past the last of the alpine growth
   }
   let y = f32(p.cell.y) + p.frac.y;
+  // How much of the wood is left at this height: 1 under the tree line, 0 by the alpine
+  // line. Everything below is scaled by it, so the undergrowth climbs the mountain and
+  // thins out on the way rather than stopping along a contour.
+  let alpine = 1.0 - smoothstep(TREE_LINE * 0.80, ALPINE_LINE, ground);
   var best = vec2f(1e9, 0.0);
   for (var i = -1; i <= 1; i++) {
     for (var j = -1; j <= 1; j++) {
@@ -868,30 +906,49 @@ fn ferns(p: WorldPoint, ground: f32) -> vec2f {
       let q = wp_offset(p, -vec3f(shift));
       let id = wp_repeat_id(q, FERN_CELL);
       let r = cell_random(id, 3u);
-      // The density costs a noise sample, so reject on the cell's own random first:
-      // the cells past the gate's ceiling never need it.
-      if (r.x > 0.98) {
-        continue;
-      }
       var local = wp_repeat_near(q, FERN_CELL, shift);
       let jitter = cell_jitter(id, 10u, FERN_CELL, 1.0);
       local.x -= jitter.x;
       local.z -= jitter.y;
       local.y = y - ground;
-      let reach = (3.0 + r.y * 3.2) * S;
-      let bound = sd_cylinder(local - vec3f(0.0, reach * 0.4, 0.0), reach * 0.9, reach + 0.5 * S);
+      // The bound is built for the biggest a fern in this cell could be, because how big
+      // it actually is depends on how near the water it stands and that is read behind
+      // the bound. Both of the things that change it only ever make it smaller.
+      let span = (3.0 + r.y * 3.2) * S;
+      let most = span * (1.0 + FERN_WET_SIZE);
+      let bound = sd_cylinder(local - vec3f(0.0, most * 0.4, 0.0), most * 0.9, most + 0.5 * S);
       if (bound > 0.6) {
         best = select(best, vec2f(bound, f32(BLOCK_FERN)), bound < best.x);
         continue;
       }
-      // Both decided at its own foot and read behind the bound: see `mushrooms`.
+      // All of it decided at the fern's own foot and read behind the bound: see
+      // `mushrooms`.
       let base = plant_base(id, FERN_CELL, jitter);
-      if (r.x > 0.55 + 0.43 * patch_density(base, 7u)) {
+      // Two gates on one test, cheap half first: the density is one octave and the shore
+      // is three plus a conditional land read, so the cells that could not stand even on
+      // the best bank there is never pay for the shore.
+      let density = patch_density(base, 7u);
+      if (r.x > (0.55 + 0.43 * density + FERN_WET_DENSITY) * alpine) {
         continue;
       }
-      if (shore_fade(shore_dry(base, ground), UNDER_DRY, UNDER_SHORE_BAND) < cell_random(id, 19u).x) {
+      let dry = shore_dry(base, ground);
+      // Thickest on the bank and thinning inland, which is the opposite of everything
+      // else in the wood and is what a fern actually does.
+      let wet = 1.0 - smoothstep(0.0, FERN_WET_REACH, max(dry, 0.0));
+      if (r.x > (0.55 + 0.43 * density + FERN_WET_DENSITY * wet) * alpine) {
         continue;
       }
+      // And it stands closer to the water than anything else does, which is what makes
+      // the bank a fringe of fern rather than a strip of bare sand.
+      if (shore_fade(dry, FERN_DRY, FERN_SHORE_BAND) < cell_random(id, 19u).x) {
+        continue;
+      }
+      // Lush by the water, small and hard up the mountain.
+      let reach = span * (1.0 + FERN_WET_SIZE * wet) * mix(0.55, 1.0, alpine);
+      // Alpine scrub rather than fern, dithered against the cell's own random so the
+      // change happens over a band of mountainside and not along a line.
+      let scrub = smoothstep(SCRUB_LINE, ALPINE_LINE * 0.85, ground) > cell_random(id, 21u).y;
+      let leaf = select(f32(BLOCK_FERN), f32(BLOCK_SAGE), scrub);
       var d = 1e9;
       for (var k = 0u; k < 5u; k++) {
         let a = (r.z + f32(k) * 0.2) * 6.2832;
@@ -900,7 +957,7 @@ fn ferns(p: WorldPoint, ground: f32) -> vec2f {
         let mid = dir * reach * 0.4 + vec3f(0.0, reach * 0.75, 0.0);
         d = min(d, sd_bezier_tube(local, vec3f(0.0), mid, tip, 0.45 * S, 0.12 * S));
       }
-      best = select(best, vec2f(d, f32(BLOCK_FERN)), d < best.x);
+      best = select(best, vec2f(d, leaf), d < best.x);
     }
   }
   return best;
