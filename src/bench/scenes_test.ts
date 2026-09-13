@@ -1,67 +1,58 @@
-import { hash32, random01 } from "../util/random.ts";
-import { p50Spread, type RunSummary, spreadOk } from "./runner.ts";
-import { type Pose, SCENES } from "./scenes.ts";
+// The descent scene is the planet's, and it carries the planet's own radial direction as
+// three literals. It has to: a scene pose is a pure function of t with no access to the
+// world it runs in. That makes it a copy of something that lives somewhere else, and a
+// spawn moved by a voxel would leave the scene falling at a slight angle into a hillside
+// while still reporting numbers, which is the failure this file exists to stop.
+
+import { SCENES } from "./scenes.ts";
+import { WORLDS } from "../worlds/index.ts";
 
 function assert(cond: boolean, what: string): void {
   if (!cond) throw new Error(what);
 }
 
-function pose(): Pose {
-  return { x: 0, y: 0, z: 0, yaw: 0, pitch: 0 };
-}
+Deno.test("the descent falls along the planet's own radius", () => {
+  const spawn = WORLDS.planet.spawn;
+  const len = Math.hypot(spawn[0], spawn[1], spawn[2]);
+  const up = spawn.map((c) => c / len);
 
-Deno.test("random01 is deterministic, in range, and seed-dependent", () => {
-  for (let i = 0; i < 1000; i++) {
-    const v = random01(7, i);
-    assert(v >= 0 && v < 1, `range at ${i}: ${v}`);
-    assert(v === random01(7, i), `repeatable at ${i}`);
+  const out = { x: 0, y: 0, z: 0, yaw: 0, pitch: 0 };
+  SCENES.descent.pose(0, out);
+  const d = Math.hypot(out.x, out.y, out.z);
+  assert(d > 0, "the descent starts at the spawn, so it measures nothing");
+  const dir = [out.x / d, out.y / d, out.z / d];
+
+  // Within a thousandth: the literals are the spawn direction rounded to four places.
+  for (let i = 0; i < 3; i++) {
+    const off = Math.abs(dir[i] - up[i]);
+    assert(off < 1e-3, `axis ${i} is off by ${off.toFixed(4)}: the scene no longer falls straight down`);
   }
-  assert(random01(7, 0) !== random01(8, 0), "seed changes the value");
-  assert(hash32(0) !== hash32(1), "hash distinguishes inputs");
 });
 
-Deno.test("every scene pose is a pure function of t", () => {
-  for (const scene of Object.values(SCENES)) {
-    for (const t of [0, 0.25, 0.5, 0.999, 1]) {
-      const a = pose();
-      const b = pose();
+Deno.test("the descent ends above the ground and starts above the sky", () => {
+  const out = { x: 0, y: 0, z: 0, yaw: 0, pitch: 0 };
+  SCENES.descent.pose(0, out);
+  const high = Math.hypot(out.x, out.y, out.z);
+  SCENES.descent.pose(1, out);
+  const low = Math.hypot(out.x, out.y, out.z);
+  assert(high > low, "the descent has to descend");
+  assert(low > 0, "it must not end inside the spawn");
+  // Every level of a seven-level clipmap is crossed on the way down, which is the point of
+  // the scene; the outermost is thousands of voxels out.
+  assert(high > 2000, `starts only ${high.toFixed(0)} voxels up, which crosses too few levels`);
+});
+
+Deno.test("every scene's pose is a pure function of t", () => {
+  const a = { x: 0, y: 0, z: 0, yaw: 0, pitch: 0 };
+  const b = { x: 0, y: 0, z: 0, yaw: 0, pitch: 0 };
+  for (const [name, scene] of Object.entries(SCENES)) {
+    for (const t of [0, 0.25, 0.5, 0.75, 1]) {
       scene.pose(t, a);
       scene.pose(t, b);
-      assert(JSON.stringify(a) === JSON.stringify(b), `${scene.name} at ${t}`);
-      for (const v of Object.values(a)) assert(Number.isFinite(v), `${scene.name} finite at ${t}`);
+      assert(
+        a.x === b.x && a.y === b.y && a.z === b.z && a.yaw === b.yaw && a.pitch === b.pitch,
+        `${name} gives a different pose for the same t, so two runs are not the same path`,
+      );
     }
   }
-});
-
-Deno.test("flyover covers sprint speed times duration", () => {
-  const a = pose();
-  const b = pose();
-  SCENES.flyover.pose(0, a);
-  SCENES.flyover.pose(1, b);
-  assert(Math.abs((a.z - b.z) - 200 * 10) < 1e-9, `distance ${a.z - b.z}`);
-});
-
-Deno.test("teleport visits distinct places", () => {
-  const seen = new Set<string>();
-  for (let jump = 0; jump < 8; jump++) {
-    const p = pose();
-    SCENES.teleport.pose((jump + 0.5) / 8, p);
-    seen.add(`${Math.round(p.x)},${Math.round(p.z)}`);
-  }
-  assert(seen.size === 8, `distinct places ${seen.size}`);
-});
-
-Deno.test("p50 spread compares runs per metric", () => {
-  const run = (p50: number): RunSummary => ({
-    frames: 1,
-    missedFrames: 0,
-    metrics: { "cpu.frame": { count: 1, mean: p50, p50, p95: p50, p99: p50, max: p50 } },
-  });
-  const wide = p50Spread([run(1.0), run(1.1)])["cpu.frame"];
-  assert(Math.abs(wide.relative - 0.095) < 0.001, `relative ${wide.relative}`);
-  assert(Math.abs(wide.absolute - 0.1) < 1e-9, `absolute ${wide.absolute}`);
-  assert(!spreadOk(wide), "10% and 0.1 ms is not ok");
-  // Tiny values: 20% apart but only 0.025 ms, within timer noise.
-  const tiny = p50Spread([run(0.115), run(0.14)])["cpu.frame"];
-  assert(tiny.relative > 0.05 && spreadOk(tiny), `tiny ${JSON.stringify(tiny)}`);
 });

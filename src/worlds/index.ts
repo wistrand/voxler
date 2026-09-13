@@ -2,6 +2,7 @@
 // contract in agent_docs/design-formats.md "World program".
 
 import forest from "./forest.wgsl" with { type: "text" };
+import planet from "./planet.wgsl" with { type: "text" };
 import monument from "./monument.wgsl" with { type: "text" };
 import showcase from "./showcase.wgsl" with { type: "text" };
 import terrain from "./terrain.wgsl" with { type: "text" };
@@ -18,6 +19,10 @@ export interface WorldEntry {
   // Where the camera starts instead, when the opening view wants somewhere the benchmarks
   // must not follow. `?at=` overrides it; unset means `spawn`.
   readonly start?: readonly [number, number, number];
+  // Which way it looks when it gets there, as [yaw, pitch] in radians. Unset means the
+  // default, along -Z and a little down, which is the right answer for a heightfield and
+  // the wrong one for a world you open at a distance from.
+  readonly look?: readonly [number, number];
   // Sky and lighting preset (src/render/sky.ts); DEFAULT_SKY when unset.
   readonly sky?: string;
   // Far-field clipmap overrides, for worlds whose subject is distance. A world that is
@@ -37,6 +42,7 @@ export interface WorldProgram {
   readonly seed: number;
   readonly spawn: readonly [number, number, number];
   readonly start?: readonly [number, number, number];
+  readonly look?: readonly [number, number];
   readonly sky: Sky;
   readonly far?: WorldEntry["far"];
   readonly birds?: boolean;
@@ -66,6 +72,30 @@ export const WORLDS: Readonly<Record<string, WorldEntry>> = {
   // they cost is reach, 16,384 voxels rather than 32,768, which is why the desert haze
   // is thicker than the view alone would want.
   monument: { code: monument, spawn: [0, 62, 0], sky: "desert", far: { size: 64, levels: 6, bricks: 98304 } },
+  // A ball rather than a heightfield. Sea level is 2600 voxels from the origin and the
+  // whole planet is about 5,200 across, so it fits in a frame from far enough out.
+  //
+  // It opens in orbit rather than on the ground, and that is not showmanship. The camera
+  // has yaw and pitch and no roll, and its up is the world's +Y, so on a sphere the ground
+  // is only level where the local up happens to agree: at the poles. Stand anywhere else
+  // and the horizon is a wall down one side of the frame. From out here the planet is a
+  // planet, and flying in still works as long as you accept that down is wherever you left
+  // it. `spawn` is a measured point on an equatorial continent (26 voxels over grass,
+  // found by flying there and reading the block underfoot) because the bench scenes and
+  // `?at=` want somewhere on the surface; `start` is the view.
+  planet: {
+    code: planet,
+    spawn: [2161, 0, -1576],
+    start: [2977, 3846, 3846],
+    look: [0.6588, -0.6691],
+    sky: "space",
+    // Seven levels, not the eight the thin air would otherwise buy. Reach is 16,384 voxels
+    // and the far side of the planet from the descent's start is 9,300: the eighth level
+    // was marching, and having its slabs sampled, for a shell that is not there. A level
+    // costs more here than in a heightfield world, because a shell passes through every
+    // one of them and none of them is empty.
+    far: { levels: 7 },
+  },
   showcase: { code: showcase, spawn: [16, 12, 48] },
   terrain: { code: terrain, spawn: [16, 140, 48] }, // surface near the origin is about 75
 };

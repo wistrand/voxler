@@ -137,6 +137,7 @@ export class Voxler {
       seed: o.world.seed,
       spawn: o.world.spawn,
       start: o.world.start,
+      look: o.world.look,
       sky: o.world.sky,
       birds: o.world.birds,
     };
@@ -230,7 +231,17 @@ export class Voxler {
         onError?.(message);
       },
     };
-    const ok = await voxler.init();
+    // The constructor has already spawned the worker pool, and `init()` may have built a
+    // device before whatever went wrong went wrong. Both paths out of here have to give
+    // those back: a `false` return and a throw leak exactly the same things.
+    let ok = false;
+    try {
+      ok = await voxler.init();
+    } catch (err) {
+      voxler.hooks = hooks;
+      voxler.dispose();
+      throw err;
+    }
     voxler.hooks = hooks;
     if (!ok) {
       voxler.dispose();

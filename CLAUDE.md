@@ -223,7 +223,7 @@ open, start Chrome with `--remote-debugging-port=9222` and add
 `--isolated`.
 
 URL switches: `?world=<name>&seed=<n>` picks the world program (`showcase`, `terrain`, `forest`,
-`monument`; default `showcase`); `?defaultLimits` requests no raised limits (tests the default-limits
+`monument`, `planet`; default `showcase`); `?defaultLimits` requests no raised limits (tests the default-limits
 invariant); `?at=x,y,z` starts the camera at a world position; `?workers=n` sets
 the pool size; `?workerTest` runs the worker pool self-test into the overlay;
 `?jobBatch=n` caps jobs per worker message (1 disables batching);
@@ -247,7 +247,7 @@ sizes the near-field quad arena (default 64); `?ao=0` meshes and draws without
 baked AO (the phase 5 A/B; it also drops the mesh job back to 6 neighbors); `?tex=0`
 draws flat block colors instead of sampling the block textures; `?glow=0` drops block
 emission, `?wind=0` holds swaying blocks still, `?light=0` meshes and draws without block
-light and `?shadow=0` stops marching shadow rays; `?sky=<day|night|desert>` overrides the
+light and `?shadow=0` stops marching shadow rays; `?sky=<day|night|desert|space>` overrides the
 world's own sky and lighting preset (`src/render/sky.ts`); `?birds=0` turns the bird flock off in a world
 that has one; `?gizmo=0` starts without the axis cross in the corner, which is what a
 screenshot wants; `?far=0` turns the far
@@ -301,8 +301,9 @@ Console handle: `voxler` (`gpu`, `renderer`, `camera`, `controls`, `follow`, `po
 `voxler.edit.fillBox(voxler.brushes, x0, y0, z0, x1, y1, z1, id)`; the returned id
 undoes it with `voxler.brushes.remove(id)`.
 
-Benchmarks: `?bench=<flyover|spin|teleport|cave|grove>&runs=n` on the dev server
-(`grove` walks under the forest's canopy and wants `?world=forest`). Renders at
+Benchmarks: `?bench=<flyover|spin|teleport|cave|grove|descent>&runs=n` on the dev server
+(`grove` walks under the forest's canopy and wants `?world=forest`; `descent` falls from
+orbit onto the planet and wants `?world=planet`). Renders at
 1920x1080 unless `?size` is given, stops the loop when done, and saves one JSON per
 run to `bench/results/<scene>.<UTC timestamp>.<browser>.json` (dated on purpose;
 never rename or edit them). `bench/` is gitignored, so the files are local to whichever
@@ -456,6 +457,36 @@ under 0.07. The march is the largest pass in the frame since it went full resolu
 breaking up. The empty-scene baseline is CPU 0.12 ms p50, GPU 0.25 (plan-foundation
 phase 6).
 
+**The planet is the stress test.** `?world=planet&bench=descent` is a shell rather than a
+heightfield, so no clipmap level is empty, and its SDF is a stack of 3D noise. The descent
+crosses every level in one run, which is what makes it the scene for level transitions
+rather than for steady state. It holds 120 Hz now (interval p50 8.34, 14 and 18 missed of
+about 1680 across two runs, `stream.holes` 0, `gpu.far.build` 0.92 p50 and 2.03 p99;
+`descent.20260913T172403Z`). It did not at first, and the three things that were wrong are
+worth knowing because none of them is specific to a planet:
+
+| | before | after |
+| --- | --- | --- |
+| `gpu.far.build` p50 | 45.02 ms | 0.92 ms |
+| `gpu.far.build` p99 | 101.19 ms | 2.03 ms |
+| `interval` p50 | 58.34 ms (17 fps) | 8.34 ms |
+| `cpu.frame` p50 | 1.91 ms | 0.82 ms |
+
+- **A scatter that evaluated the terrain before rejecting a cell.** 27 neighbours, each
+  asking for the surface height, to throw 25 answers away. The bound is a length against
+  the shell's own limits and needs no noise at all.
+- **Plants built into far-field bricks.** Gated to under the finest clipmap cell, so they
+  are in the meshes and in no brick, the way the forest's undergrowth is.
+- **A clipmap reaching 32,768 voxels for a world 5,200 across.** Seven levels, not eight. A
+  level costs more here than in a heightfield world because a shell passes through all of
+  them.
+
+The artefacts at level changes were three separate faults and are written up in
+[gotchas.md](agent_docs/gotchas.md): `ridged3` ignoring `octave_weight` so its octaves
+never faded, a Lipschitz bound of 6 on a field that reached 12.5 (and a first correction to
+9 that had still counted only three of its five terms), and a sky with too little ambient
+to light the risers of a curved voxel surface.
+
 Four things are over target, and each is recorded where it belongs rather than smoothed
 away here:
 
@@ -566,6 +597,12 @@ away here:
   narrower one"). The level count asked for here is a ceiling, trimmed at startup to the
   world's fog horizon; the direction that is not automatic is the other one, a world whose
   reach is shorter than its fog, which cuts visibly and needs thicker air.
+  A world that is not a heightfield needs one thing more: `look`, the direction the camera
+  opens in, because the default (along -Z, a little down) assumes the ground is under you
+  and the sky is up. `planet` is a shell rather than a heightfield and opens in orbit, and
+  the reason it does is that the camera has yaw and pitch and no roll
+  ([gotchas.md](agent_docs/gotchas.md) "A round world has no up for a camera that only has
+  yaw and pitch").
   A new block type is one entry in `BLOCKS` (`src/world/blocks.ts`); worlds see it as
   `BLOCK_<NAME>`; a name that is not an identifier becomes one (`leaves-dark` is
   `BLOCK_LEAVES_DARK`). A block that glows carries an `emission` colour, added to the lit

@@ -35,6 +35,8 @@ export interface WorldSource {
   readonly spawn?: readonly [number, number, number];
   // Where the camera opens, when that should not be the spawn.
   readonly start?: readonly [number, number, number];
+  // Which way it looks when it opens, [yaw, pitch] in radians.
+  readonly look?: readonly [number, number];
   // A name from `SKIES`, or a preset of your own. Unset means `DEFAULT_SKY`.
   readonly sky?: string | Sky;
   // Clipmap overrides for a world whose subject is distance; see `far` in
@@ -134,6 +136,7 @@ export interface ResolvedOptions {
     readonly seed: number;
     readonly spawn: readonly [number, number, number];
     readonly start: readonly [number, number, number];
+    readonly look?: readonly [number, number];
     readonly sky: Sky;
     readonly birds: boolean;
   };
@@ -240,13 +243,14 @@ export function resolveOptions(options: VoxlerOptions): ResolvedOptions {
       seed: Number.isInteger(options.seed) ? (options.seed as number) >>> 0 : 1,
       spawn,
       start,
+      look: world.look,
       sky,
       birds: (options.birds ?? world.birds) === true,
     },
     camera: {
       at: options.camera?.at ?? start,
-      yaw: num(options.camera?.yaw, 0, -Math.PI * 2, Math.PI * 2),
-      pitch: num(options.camera?.pitch, DEFAULT_START_PITCH, -Math.PI / 2, Math.PI / 2),
+      yaw: num(options.camera?.yaw ?? world.look?.[0], 0, -Math.PI * 2, Math.PI * 2),
+      pitch: num(options.camera?.pitch ?? world.look?.[1], DEFAULT_START_PITCH, -Math.PI / 2, Math.PI / 2),
     },
     workers: {
       count: int(workersIn.count, defaultWorkerCount(), 1, 64),
@@ -256,7 +260,10 @@ export function resolveOptions(options: VoxlerOptions): ResolvedOptions {
     streaming,
     stream,
     arenaBytes: int(streamIn.arenaBytes, DEFAULT_ARENA_BYTES, 16 * 1048576, 2048 * 1048576),
-    voxelSlots: int(streamIn.voxelSlots, DEFAULT_VOXEL_SLOTS, 1, 32),
+    // 16 and not 32: the ceiling the demo's `?voxelSlots=` has always had. Each slot is a
+    // mapped readback buffer holding a whole batch, so the cost of a high one is memory
+    // that never comes back.
+    voxelSlots: int(streamIn.voxelSlots, DEFAULT_VOXEL_SLOTS, 1, 16),
     meshing,
     mesh: {
       ...DEFAULT_MESH_OPTIONS,

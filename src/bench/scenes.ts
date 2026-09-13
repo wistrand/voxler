@@ -137,4 +137,38 @@ const grove: Scene = {
   },
 };
 
-export const SCENES: Readonly<Record<string, Scene>> = { flyover, spin, teleport, cave, grove };
+// A descent onto the planet, from four thousand voxels out down to forty over the ground,
+// looking straight down the whole way. Run it with `?world=planet`.
+//
+// It is here because the planet is the worst case this engine has: a shell rather than a
+// heightfield, so the far field cannot skip the inside or the outside of it, and an SDF
+// whose every sample is a stack of 3D noise. Descending crosses every clipmap level in one
+// run, which is what makes it the scene for level transitions rather than for steady state.
+//
+// The path is radial, along the spawn's own direction from the planet's centre, because
+// "up" here is not +Y. That direction is the spawn's, normalised, and it is written out
+// rather than computed so the scene stays a pure function of t.
+const PLANET_UP = [0.8079, 0.0, -0.5893] as const;
+const PLANET_HIGH = 4000; // where the descent starts, in voxels above the spawn
+const PLANET_LOW = 40;
+
+const descent: Scene = {
+  name: "descent",
+  description: "a fall from orbit onto the planet, looking down, crossing every clipmap level",
+  seed: 1,
+  warmupMs: WARMUP_MS,
+  durationMs: 14_000,
+  pose(t, out) {
+    // Quadratic in t, so the slow part is near the ground where the near field is doing
+    // the work and the fast part is out where a frame is one long march.
+    const d = PLANET_HIGH + (PLANET_LOW - PLANET_HIGH) * (t * t);
+    out.x = PLANET_UP[0] * d;
+    out.y = PLANET_UP[1] * d;
+    out.z = PLANET_UP[2] * d;
+    // Looking straight down the radius at the ground below.
+    out.yaw = Math.atan2(PLANET_UP[0], -PLANET_UP[2]);
+    out.pitch = -Math.PI / 2 + 0.22;
+  },
+};
+
+export const SCENES: Readonly<Record<string, Scene>> = { flyover, spin, teleport, cave, grove, descent };

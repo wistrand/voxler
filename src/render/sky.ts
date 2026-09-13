@@ -100,7 +100,49 @@ const DESERT: Sky = {
   stars: 0.0,
 };
 
-export const SKIES: Readonly<Record<string, Sky>> = { day: DAY, night: NIGHT, desert: DESERT };
+// Space, for a world small enough to see all of. Every other preset here fogs the view
+// out at a few thousand voxels, which is right for a world that goes on and wrong for a
+// ball 5,200 voxels across: seen from far enough away to fit in the frame, the planet was
+// the colour of the sky. So the air is thin enough to see through from orbit, and the
+// price is paid at ground level, where there is no haze to give distance away.
+//
+// Dark sky and stars rather than blue, because the same air that would make it blue is the
+// air that was hiding the planet. Sunlight is hard and white with little to fill the
+// shadows, which is what an airless sky does to a landscape.
+const SPACE: Sky = {
+  name: "space",
+  lightDir: [0.48, 0.62, 0.62],
+  lightColor: [1.0, 0.97, 0.92],
+  // Not as low as an airless sky would really be. A curved surface made of axis-aligned
+  // voxels is a staircase, and seen at a grazing angle it is all risers: with ambient at
+  // 0.16 every one of them went black and the planet read as though it were full of holes,
+  // which is what the combing across the oceans was. Lifting the fill turns them back into
+  // steps. The direct light stays hard, which is what carries the airless look
+  // (gotchas.md "A curved world is a staircase, and ambient is what stops it reading as
+  // holes").
+  //
+  // 0.45 in total and not a hair more: `src/world/blocks_test.ts` holds every sky against
+  // the brightest emissive block, because nothing tonemaps and a glowcap under a brighter
+  // fill than this clips to white and stops being green. 0.30 and 0.20 broke it, which is
+  // the test doing its job.
+  ambient: 0.28,
+  ambientSky: 0.17,
+  horizon: [0.035, 0.045, 0.07],
+  zenith: [0.01, 0.012, 0.025],
+  ground: [0.02, 0.02, 0.028],
+  // A twentieth of the day sky's: about a tenth of the light lost across a view of the
+  // whole planet, which reads as distance without hiding it. The clipmap's reach is trimmed to where fog has taken
+  // the view, so this is also what buys the levels that reach the far side of the planet.
+  fogDensity: 0.00002,
+  blockLight: 0.85,
+  disc: 0.0, // a sun bright enough to look at is too bright for an untonemapped frame
+  discCos: 0.9995,
+  discColor: [1.0, 1.0, 0.97],
+  haloCos: 0.985,
+  stars: 1.0,
+};
+
+export const SKIES: Readonly<Record<string, Sky>> = { day: DAY, night: NIGHT, desert: DESERT, space: SPACE };
 export const DEFAULT_SKY = "day";
 
 // What is left of a surface at the far end of the view, under which drawing it and

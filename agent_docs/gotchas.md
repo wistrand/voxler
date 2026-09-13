@@ -1175,3 +1175,102 @@ device loss, so every link is a field assignment that compiles whether or not an
 it. Two compositions of the same engine is the condition that allows one of them to be
 missing a link, which is the argument for `main.ts` using `Voxler` rather than paralleling
 it (plan-packaging.md phase 1).
+
+### A round world has no up for a camera that only has yaw and pitch
+
+`src/worlds/planet.wgsl` is a shell rather than a heightfield: the ground is
+`length(p) - (RADIUS + height(direction))` and up is `normalize(p)`. The field works, the
+plants scatter on it, and from orbit it is a planet. Standing on it is where it comes apart.
+
+`FlyCamera` has a yaw and a pitch and no roll, and its up is the world's +Y
+(`setOrientation` builds the basis from those two angles alone). On a sphere the local up
+agrees with that in exactly two places, the poles. Anywhere else the ground is tilted by
+the angle between them, and at the equator it is a wall running down one side of the frame.
+The first surface screenshot of this world looked like a cliff face because it *was* the
+ground, stood on end.
+
+There is no cheap fix. Roll is not a fourth angle bolted to the other two: the camera
+basis, the controls that drive it, the follow flyover and anything that assumes "up is +Y"
+would all have to carry an orientation instead. What the planet does instead is open in
+orbit (`look` in `src/worlds/index.ts`, added for this) and say so.
+
+**A world whose up is not +Y needs more than a world program.** The contract in
+[design-formats.md](design-formats.md) "World program" is about the field, and the field is
+the easy half. The camera, and anything that reasons about height rather than radius, is
+the other half.
+
+### Fog density is what a world can be seen from, not just how hazy it looks
+
+The planet is 5,200 voxels across and wants to be looked at from outside. Under the day
+sky it was the colour of the sky: `fogDensity` 0.00035 leaves 8% of a surface at 7,300
+voxels, so the whole world had mixed into the background and what was left was a faint
+disc.
+
+The far field was working perfectly and the picture was nearly empty, which is the
+confusing part. Fog is applied by `apply_fog()` to every fogged voxel and to the sky
+identically, so a world lost in it looks like a world that was never built.
+
+`SPACE` in `src/render/sky.ts` is a twentieth of that density, and the planet appears. The
+trade is real and is the reason it is a separate preset rather than a tweak: thin air also
+means no aerial perspective at ground level, so distance there has to be carried by
+something else. Note the coupling in the other direction too: `fogHorizonVoxels()` trims
+the clipmap to where fog has taken the view, so lowering the density is also what buys the
+levels that reach the far side of the planet (CLAUDE.md "A new world").
+
+### A curved world is a staircase, and ambient is what stops it reading as holes
+
+The planet's oceans came out shredded into vertical combs with black gaps, and it looked
+like the far field had lost half its bricks. Three things were ruled out in turn by
+switching them off: shadows (`?shadow=0`, identical), the beam pre-pass (`?farBeam=0`,
+identical), and then the giveaway, which was that the *land* was combed too.
+
+It is not missing geometry. A sphere quantised into axis-aligned voxels is a staircase, and
+at a grazing angle you are looking at the risers rather than the treads. Under the `space`
+sky those risers face away from the only light and have almost no fill to catch, so they go
+to the same near-black as the sky behind the planet, and a step reads as a hole. The same
+frame under `?sky=day` reads as terracing and nothing else, which is what proved it.
+
+The fix was ambient, 0.16 to 0.45 in total, with the direct light left hard. **A world with
+no flat ground cannot have a sky with no fill.** A heightfield never shows this because its
+steps face the camera; only a curved surface turns its whole visible area into risers.
+
+There is a ceiling on that fix, and `src/world/blocks_test.ts` found it: the first attempt
+went to 0.50 and failed the test that holds every sky against the brightest emissive block,
+because nothing tonemaps and a glowcap under that much fill clips to white and stops being
+green. The room between "risers are black" and "glowcaps are white" is what a sky for a
+curved world has to fit in.
+
+### A Lipschitz bound is a promise about the steepest thing in the world, including the ramps
+
+The planet declared `WORLD_LIPSCHITZ = 6` and its field reached about **54**, so region
+skipping cut holes through the oceans and the coasts.
+
+The mountains were not the problem. The problem was a smoothstep:
+
+```wgsl
+let coast = smoothstep(0.0, 0.10, land);   // a ramp over a tenth of a slow field
+return (6.0 + rolling + ridges) * coast;    // multiplying up to 160 voxels of relief
+```
+
+`land` is a 1024-voxel-wavelength field, so it moves about 0.03 per voxel, so a ramp 0.10
+wide spans **three voxels** and carries the whole relief across it. That is a gradient of
+54 hiding inside a line that looks like a shaping detail rather than a slope.
+
+Widening that band to 0.8 dropped the term to 4.2 and made the coastlines into continental
+shelves, which looked better anyway. But the first correction was still wrong: it went to 9
+having counted only three of the five terms, and the audit that followed found the rest.
+
+    the sphere                                              1.0
+    the rolling field, 42 voxels at a 256 wavelength        2.2
+    the ridges, 78 at 512, doubled by their squared crests  4.1
+    the `range` smoothstep, multiplying those ridges        1.0
+    the `coast` smoothstep, multiplying all the relief      4.2
+                                                           ----
+                                                           12.5   declared: 9
+
+**A bound is arithmetic, not a guess**, and the terms that get missed are the smoothsteps,
+because they read as shaping and behave as slopes. Write the sum out where the constant is
+declared, so the next person changing an amplitude can see what it was made of. The final
+13 cost nothing measurable: `gpu.far.build` is 0.92 ms p50 at 9 and at 13
+(`descent.20260913T174809Z`), because on this world the skipping that a tighter bound buys
+was not where the time was going anyway.
