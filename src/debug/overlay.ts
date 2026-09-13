@@ -1,5 +1,6 @@
 // Debug overlay: named text sections plus a bounded error log. Updated on change,
-// never per frame. F2 toggles it (bound in main.ts); an error forces it visible.
+// never per frame. Starts hidden, because the world is what the page is for; F2 toggles
+// it (bound in main.ts) and an error forces it visible whatever the toggle says.
 
 const MAX_ERRORS = 20;
 
@@ -11,6 +12,7 @@ export class Overlay {
   constructor(parent: HTMLElement) {
     this.root = document.createElement("div");
     this.root.id = "overlay";
+    this.root.hidden = true;
     this.errors = document.createElement("pre");
     this.errors.className = "errors";
     this.errors.hidden = true;
@@ -36,6 +38,12 @@ export class Overlay {
     this.errors.append(entry);
     while (this.errors.childElementCount > MAX_ERRORS) this.errors.firstElementChild?.remove();
     this.errors.hidden = false;
+    this.root.hidden = false;
+  }
+
+  // Forces the overlay open, for the one caller that needs it whatever the default is:
+  // a benchmark run, whose progress is the only thing on screen worth watching.
+  show(): void {
     this.root.hidden = false;
   }
 

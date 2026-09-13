@@ -80,6 +80,17 @@ export class FlyControls {
     canvas.addEventListener("wheel", (e) => this.onWheel(e), { passive: true });
   }
 
+  // Which way the up and down keys are pressed, -1, 0 or 1, and whether sprint is held.
+  // Read by anything that drives the camera instead of these controls and still wants
+  // those keys to mean something (the follow flyover raises and lowers with them).
+  get vertical(): number {
+    return (this.up ? 1 : 0) - (this.down ? 1 : 0);
+  }
+
+  get sprinting(): boolean {
+    return this.sprint;
+  }
+
   update(dt: number): void {
     const cam = this.camera;
     if (this.lookX !== 0 || this.lookY !== 0) {

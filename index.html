@@ -23,6 +23,28 @@
   }
   #overlay pre { margin: 0 0 8px; white-space: pre-wrap; }
   #overlay .errors { color: #ff9a9a; }
+  /* The always-on panel: frame rate, switches, and what the engine is compiling.
+     Top right, so it never sits under the debug overlay (F2), which is top left. */
+  #hud {
+    position: fixed; top: 8px; right: 8px; display: flex; flex-wrap: wrap; gap: 6px;
+    align-items: center; justify-content: flex-end; max-width: 60vw;
+    color: #d8e4ee; font: 12px/1.4 ui-monospace, monospace; user-select: none;
+  }
+  #hud .fps {
+    min-width: 52px; text-align: right; padding: 3px 6px; border-radius: 4px;
+    background: rgba(0, 0, 0, 0.55); font-variant-numeric: tabular-nums;
+  }
+  #hud button {
+    padding: 3px 8px; border: 1px solid rgba(216, 228, 238, 0.25); border-radius: 4px;
+    background: rgba(0, 0, 0, 0.55); color: #97a7b5; font: inherit; cursor: pointer;
+  }
+  #hud button:hover { border-color: rgba(216, 228, 238, 0.55); color: #d8e4ee; }
+  #hud button.on { background: rgba(120, 190, 150, 0.28); color: #eafff2; }
+  #hud .note {
+    flex-basis: 100%; text-align: right; padding: 3px 6px; border-radius: 4px;
+    background: rgba(0, 0, 0, 0.55); color: #cbd8e4;
+  }
+  #hud .note[hidden] { display: none; }
 </style>
 </head>
 <body>

@@ -441,3 +441,278 @@ Diagnosed bugs, as symptom, diagnosis, fix, takeaway. None diagnosed yet.
 - **Takeaway:** pick one coordinate space for a pointer and stay in it. Mixing `offset*`
   with `client*` or with a measured rect is a bug that only appears on a zoomed page,
   which is not the machine it will be written on.
+
+### A wall at an angle the grid does not like
+
+- **Symptom:** dark one-pixel lines running down an otherwise flat voxel cliff, worst
+  where the wall is long and straight. Reads as a rendering bug; is not one.
+- **Diagnosis:** a surface at an arbitrary angle to the axes staircases. Reading the
+  chunk store across 40 voxels of one butte wall found the surface stepping by exactly
+  one voxel 19 times, and each step has a side face that rasterizes as a one-pixel line
+  when seen near head-on. Greedy meshing then merges consecutive side faces into long
+  quads, which is what turns per-voxel stipple into a ruled line.
+- **Fix:** put the surface on the grid. Snapping a world's plan faces to multiples of 45
+  degrees took the same wall from 19 steps to 1; moving a wall's fine detail from geometry
+  to material (a stain rather than a groove) removes the rest, because a colour change
+  makes no side faces at all.
+- **Takeaway:** measure the voxels, not the pixels. Half a day of pixel statistics said
+  "crack", "AO" and "T-junction" in turn; one read of the chunk store along the wall
+  settled it. And when a world needs fine vertical detail on a wall, prefer a material
+  that varies over a shape that does.
+
+### The near field's coverage is a chunk, not a pixel
+
+- **Symptom:** sky-coloured steps down the silhouette of a butte, on the edge of its talus
+  ramp, with desert on both sides. Reported first as "the sky color seems to appear on the
+  borders of the pillars", and it was exactly that.
+- **Diagnosis:** the far-field march stopped dead at the first cell inside a chunk the
+  near field is drawing, on the reasoning that the raster pass owns that pixel. It does
+  not: coverage is per 32-voxel chunk, and along a silhouette a ray grazes a covered chunk
+  the raster pass never filled. The march stopped, wrote alpha 0, the blit discarded, and
+  the sky drawn before it showed through. Measured: 560 sky pixels on one ramp with the
+  near field on, 0 with `?mesh=0&preview=0`, and at `?sky=night` the same pixels came back
+  as night sky, which is what proved they were sky and not a material.
+- **Fix:** march *past* a covered cell instead of stopping on it. By the time the march
+  runs, the pass's own depth test has already found this pixel empty, so the near field
+  has no geometry anywhere along this ray and whatever is behind the covered chunk is what
+  should be drawn. 560 sky pixels to 0, and 1,200 pixels changed in the whole frame, all
+  of them at silhouettes.
+- **Takeaway:** a per-chunk mask cannot answer a per-pixel question. When one renderer
+  defers to another, it has to defer on the thing the other actually drew, and the depth
+  buffer is the only thing that knows that.
+
+### A near-level surface is a contour map, and the fix is wavelength
+
+- **Symptom:** the desert floor in even parallel ribs from the camera to the middle
+  distance, one voxel high, each with a black side. Reported as "this looks very broken",
+  and it was the worst case of the terracing in "A wall at an angle the grid does not
+  like" rather than a new bug.
+- **Diagnosis:** a shallow ramp in a voxel world is a contour map. The step spacing is one
+  over the slope, so the *flattest* surface in a world is the one that draws the most
+  visible lines: 9 voxels of dune over a 512-voxel lattice is a slope of 0.035, a step
+  every twenty-six voxels. Each step's side face is vertical, takes no sun from overhead
+  and reads near-black against a lit floor, and the greedy mesher merges consecutive ones
+  into long quads, so they come out ruled instead of stippled.
+- **Fix:** spend the relief budget on wavelength. 7 voxels over 8,192 plus 4 over 2,048 is
+  a slope near 0.005 and a terrace every couple of hundred voxels, which reads as a bench.
+- **What did not work:** adding a fine ripple to make the terrace edges ragged. The edges
+  stopped being straight and there were four times as many of them, which is worse: the
+  count is what the eye picks up, not the straightness.
+- **Takeaway:** on anything near level, amplitude is free and slope is not. Add an octave
+  only if it is long enough not to cut new terraces.
+
+### A wider clipmap level can be cheaper than a narrower one
+
+- **Symptom:** the far field cost 7.3 ms a frame marching a clear-air desert at 1080p,
+  with eight levels of 32^3 bricks.
+- **Diagnosis:** march cost follows how many *levels* a ray crosses on its way out, not
+  only how many cells. Doubling a level's width to 64^3 and dropping to six levels halved
+  the level crossings, and it halves the cell size at any given distance as a bonus:
+  3.5 ms, and finer than what it replaced. The bricks are affordable only because the
+  world is mostly empty air and an empty brick takes no pool slot (30,382 bricks against
+  8,101 in a world with monuments a kilometre apart; a dense world would pay differently).
+- **Fix:** a world picks its own clipmap (`far` in `src/worlds/index.ts`, `?farSize=n` to
+  try one). What it costs is reach, and fog has to cover the end of the last level, so the
+  world's fog density and its clipmap are one decision, not two.
+- **Takeaway:** reach, cell size and level count trade against each other three ways.
+  Measure the combination in the world that has to run it; the default that suits terrain
+  suits nothing else automatically.
+
+### The covered-cell path is not hot
+
+- **Symptom:** none. This is a failed optimisation, recorded so it is not tried twice.
+- **The idea:** the far march tests `near_covers()` once per cell and marches past a
+  covered one, up to twenty-four times in a brick. The near field's radius is 512 voxels,
+  which at 32^3 levels is exactly the first two, so those looked like two whole levels
+  walked cell by cell inside ground the raster pass owns. A brick at a fine level lands
+  inside one chunk, so one mask lookup should have replaced all of them.
+- **Measured:** no difference at all. 5.37 ms p50 without the brick test, 5.37 to 5.44
+  with it, back to back at the same camera, and 2.36 against 2.23 in an earlier
+  unthrottled state.
+- **Why:** `march_far()` skips every pixel the near field already drew, so a ray that
+  reaches the march is one the near field drew nothing along, and the inner levels along
+  such a ray hold empty bricks, which cost one indirection read and no cell walk. A brick
+  with geometry in it is a brick the raster pass would have drawn. The covered-cell path
+  is for silhouettes, and a silhouette is a sliver of the frame.
+- **Takeaway:** the march's cost is in the outer levels, where rays are long and bricks
+  are occupied. An optimisation aimed at the near/far boundary is aimed at the cheap end.
+  Read `?far=steps` before optimising a loop on an argument about where the work must be.
+
+### A footprint gate deletes a feature from the far field
+
+- **Symptom:** in the forest, the wood stops. Past about a kilometre there are no trees
+  and no giant mushrooms, only bare hills, and the edge is a line rather than a fade.
+  Reported as "the far field cut also seems to miss entire objects, as trees or
+  mushrooms".
+- **Diagnosis:** not the far field at all. `forest()` had
+  `if (sample_footprint <= TREE_FOOTPRINT)` around the trees, the giants and the rocks,
+  and the far-field brick builder sets `sample_footprint` to the level's cell size
+  (`src/far/far-build.wgsl`). TREE_FOOTPRINT is 4.4 voxels, so the second clipmap level
+  on (8-voxel cells, past 512 voxels) evaluated a world with no trees in it. The gate was
+  cost control and it read as deletion.
+- **Fix:** a gate changes the representation, it does not remove the thing. Past the
+  detail footprint a tree is a crown ellipsoid and a trunk cylinder, placed and sized from
+  the same numbers so the swap moves nothing sideways; past a footprint as wide as its own
+  crown it goes, because by then it cannot be drawn without being inflated to a cell.
+- **The second half of it:** the same imposter for the giant mushrooms came out as flat
+  neon plates hanging over the wood, wider than the mushroom and the brightest thing in
+  the frame. A cap is small, bright and thin-lipped: quantised to an 8-voxel cell the lip
+  becomes a full cell and the cap becomes a plate, and emission makes sure you look at it.
+  Giants keep a much finer gate than trees for that reason, and use a dome with no lip
+  above 3 voxels. **A broad continuous feature survives being drawn coarsely; a small
+  bright one does not.**
+- **Takeaway:** `sample_footprint` is read by the voxelizer at 1 voxel, by the preview at
+  a pixel cone, and by the far-field builder at 1 to 256 voxels. Any `if` on it is a
+  statement about what the far field contains. Check a world's footprint gates before
+  blaming the clipmap for missing geometry.
+
+### Dithering a level boundary shows both levels at once
+
+- **What was tried:** every clipmap level's window is a camera-centred box, so the
+  distance at which a ray gives up one level for the next is the same for every ray: a
+  circle drawn on the world. Spreading the switch over a band, each ray shrinking the
+  window it marches by a hashed fraction, turns the circle into a band.
+- **Why it is worse:** the two levels do not hold the same world. Inside the band each ray
+  answers from a different one, so the geometry of the level a ray did *not* pick shows
+  through the gaps in the geometry of the one it did. Standing still that is a ragged
+  edge; moving, the band sweeps across the frame and the far field boils. Reported as
+  "other voxel mesh shines through, in the seam", which is exactly what it is.
+- **Hashing the direction instead of the pixel** made it coarser, not better: patches of
+  the wrong level instead of a screen door of it.
+- **Taken out.** The hard boundary is coherent, and coherent beats soft when the two sides
+  disagree about what is there. What would actually work is *blending* the two, which
+  means marching both, and that is the cost the level walk exists to avoid.
+
+### A plant decided per sample point is a plant cut in half
+
+- **Symptom:** trees and mushrooms near the water are clipped. Not shaded oddly, not
+  moved: the parts of them over one side of an invisible line are simply missing, and the
+  line is the waterline.
+- **Cause:** the forest gated its plants on `dry = ground - water_top` evaluated at the
+  *sample point*. A world function is asked about one point at a time, and a tree is
+  thirty voxels across, so for the points where the local ground was high enough the tree
+  was in the field and for the rest it was not. The same shape came back different for
+  different parts of itself.
+- **Fix:** every test that decides whether a plant exists, or how big it is, reads the
+  world at the plant's own base (`plant_base()` in `src/worlds/forest.wgsl`) and never at
+  the point being shaded. Then the answer is one answer for the whole plant.
+- **And make the cutoff soft.** A hard threshold on a per-plant value does not clip
+  anything, but it does draw the edge of the wood as a contour line. `shore_fade()` ramps
+  over a band: the fade is the plant's chance of standing *and* a factor on its size, so
+  the wood thins and shrinks into the shore instead of stopping.
+- **It has to be cheap, because it runs per plant per sample.** Read behind the plant's
+  bounding test, so only sample points already standing inside a plant pay for it, and
+  work out what actually cancels: inside the stream's cut the ground and the water surface
+  are the same land height less their own constants, so the difference is the cut profile
+  and `land_height` drops out. The first version called the full ground and water at every
+  candidate and took the forest's brick build from 6 ms to 55; the same test costs one
+  extra noise field now.
+- **Takeaway:** anything about a placed object -- whether it is there, what species it is,
+  how big it is -- is a property of the object, so read it where the object is. Only its
+  *shape* may depend on the point being asked about.
+
+### Domain repetition loses the neighbour offset
+
+- **Symptom:** every scatter in every world looks like it is on a grid, and the objects
+  are cut off along the grid lines. Reported three times over several sessions, and
+  survived two fixes aimed at the jitter and at the density, because neither was the
+  cause.
+- **The bug:** the 3x3 neighbour loop is written as "offset the sample point by a whole
+  cell, then ask which cell it is in and where it is inside that cell":
+
+      let q = wp_offset(p, -vec3f(shift));      // shift is (i, j) * period
+      let id = wp_repeat_id(q, period);          // the neighbour's cell: correct
+      var local = wp_repeat(q, period);          // WRONG: the same value every iteration
+
+  `wp_repeat` is periodic, and `shift` is a whole number of periods, so
+  `wp_repeat(q) == wp_repeat(p)`. The neighbour's *identity* comes through and its
+  *position* does not, so all nine objects are placed around the sample point's own cell
+  centre instead of around their own cells. Nine objects crowd onto every cell, each one
+  visible only while the sample point is inside that cell, so every object that reaches
+  past a cell boundary is cut off at it. That is a grid of clipped objects, and it is
+  also nine times the intended population, which is why the woods looked dense.
+- **Fix:** `wp_repeat_near(q, period, shift)` in `src/sdf/lib.wgsl`, which is
+  `wp_repeat(q, period) + vec3f(shift)`. Use it for every neighbour lookup; the plain
+  `wp_repeat` is only right for the cell the sample point is in.
+- **When you fix it, the population drops by nine.** The forest went from a closed canopy
+  to a meadow with four trees in it, because the density had been tuned against the bug.
+  Every acceptance rate in a world using this idiom has to be re-tuned once it is correct.
+- **Takeaway:** a periodic function eats a whole-period offset. If a lookup shifts the
+  point by the period and then asks a periodic question, the shift is gone and only an
+  index survives it.
+
+### One per cell is a grid, whatever the jitter
+
+- **Symptom:** from above, the trees are on a grid. Still on a grid after the jitter was
+  widened to fill the cell, which is the fix in the entry below and was not enough.
+- **Cause:** one candidate to a cell is a *stratified* sample, and stratified is not
+  random. Two trees are never close together and no gap is ever much wider than a cell,
+  whatever the jitter does inside it, and that regularity is what the eye reads as a grid.
+  The clumping did not save it either: `grove_density` was sampled once at the cell's
+  centre, so the *patches* were on the lattice too and had square edges.
+- **Fix, both halves:**
+  - **Several tries to a cell, each at a fraction of the chance.** Three tries at a third
+    of the acceptance keeps the count and loses the lattice, because two can land next to
+    each other and all three can fail. `TREE_TRIES` and `GIANT_TRIES` in
+    `src/worlds/forest.wgsl`.
+  - **A density that varies continuously**, read at the candidate's own position rather
+    than at its cell's centre, so nothing about the placement knows where the cell
+    boundaries are.
+- **Pay for it by moving the density behind the bound.** The density is a noise field and
+  it was being read for every candidate cell, most of which the sample point is nowhere
+  near. Read behind each plant's bounding test instead, three tries came out *cheaper*
+  than one: the forest's brick build went 10.1 ms to 8.5 per build frame.
+- **Takeaway:** jitter fixes the position of a thing within its cell. It does not fix the
+  *number* of things per cell, and one per cell is what the grid actually is.
+
+### A jittered lattice is still a lattice unless the jitter fills the cell
+
+- **Symptom:** from above, the trees are on a grid.
+- **Cause:** the jitter was half a cell, so every tree stood within a quarter cell of its
+  lattice point. That leaves a band half a cell wide down every cell boundary that no tree
+  can ever occupy, and from above those empty bands are the grid, however random the trees
+  inside the cells look.
+- **Fix:** let the jitter cover the whole cell. It costs nothing: the 3x3 neighbourhood
+  the lookup walks stays sufficient as long as a plant's reach is under one cell, which it
+  is by a factor of two (a 31-voxel crown in a 74-voxel cell), and that holds however far
+  the plant is jittered inside its own cell.
+- **Takeaway:** the budget the jitter has to respect is the plant's *reach* against the
+  cell, not the jitter against the cell. Check which one is binding before settling for
+  half.
+
+### Animate flowing water with the texture, not the geometry
+
+- **Symptom:** a waterfall built out of a block with `sway` flickers badly, worse the more
+  it sways.
+- **Cause:** two things at once. `sway` moves the *faces* in the vertex stage, so a sheet
+  of water pushes into the blocks around it and out again every frame; and the block was
+  translucent, so those moving faces sort against the still water behind them differently
+  frame to frame.
+- **Fix:** `flow` in the block table instead. The fragment scrolls the block's texture
+  down its faces at that many tiles a second and the geometry never moves, so there is
+  nothing to interpenetrate and nothing to re-sort. The falling block is opaque as well,
+  because broken water is not see-through. The texture gradients stay those of the
+  unscrolled uv, or the mip level swims with the scroll.
+- **Takeaway:** `sway` is for things attached at one end: a frond, a leaf, a cap. For a
+  surface that is *flowing* rather than moving, animate the material.
+
+### Only a rare thing reads as a special thing
+
+- **Symptom:** waterfalls everywhere. Reported as "too many waterfalls, they should only
+  appear in tight gorges".
+- **Cause:** the fall was marked wherever the stream's terracing was steep, and a stream
+  that descends the whole way turns up a riser every seven metres of height it loses. A
+  correct local test produced a global result nobody wanted: a quarter of the water came
+  out white.
+- **Fix:** three conditions that have to agree, not one. Steep, in the middle of the
+  channel (so the shallows to either side stay water), and inside a gorge stretch picked
+  by one octave of noise over a thousand voxels. That last one is the rarity dial and
+  nothing else can be: steepness is a property of the step, and the stream is full of
+  steps. 0.4% of the water is white now, and the falls are 10 to 15 voxels tall.
+- **What did not work:** gating on how high the land is. The stream is in a valley, so the
+  land at the water is low *wherever the water is*, and the gate never fired anywhere.
+  Gating on the mountain mask failed the other way: the mask saturates at 1 over a whole
+  range, so a threshold on it selects everything or nothing.
+- **Takeaway:** when a feature should be rare, the rarity needs its own field at its own
+  scale. Tightening a local test until the count comes down gets you a feature that is
+  both rare and wrong, or one that never appears.

@@ -131,10 +131,74 @@ the camera is.
       small and giant, ferns and boulders, all SDF composition under one
       `WORLD_LIPSCHITZ` (5.0, raised from 4 when the mountains arrived)
 - [x] A spawn in the wood, and the `grove` bench scene that walks under the canopy
-- [x] Nothing rooted grows below the waterline: trees and giants need 1.5 * S of dry
-      ground under them and undergrowth 0.5 * S, which leaves a band of bare shore
-      between the wood and the water. Boulders are exempt; a rock in a stream belongs
-      there
+- [x] Nothing rooted grows below the waterline, decided at each plant's own base and
+      faded over a band rather than cut at a line. Trees and giants want `TREE_DRY` of
+      dry ground under them and undergrowth `UNDER_DRY`, and over `*_SHORE_BAND` above
+      that the wood thins out and the trees that stand grow smaller, so the edge of the
+      wood is a scatter of small trees on the bank. Boulders are exempt; a rock in a
+      stream belongs there
+- [x] Jellyfish in the water, a few to a stream. The one thing in the world that is a
+      *material* rather than a shape: a jellyfish hangs inside water the field has
+      already called solid, so `jellyfish()` in `src/worlds/forest.wgsl` returns a
+      distance only so `forest()` can ask "is this point inside a bell" and swap the
+      block id. The surface of the lake and its bed do not move, and `WORLD_LIPSCHITZ`
+      is untouched. They drift on the block's `sway`, which is the same vertex-stage
+      wind the ferns use, so `?wind=0` holds them still
+
+**The waterline used to cut plants in half.** The test was `ground - water_top` at the
+*sample point*, and a world function is asked about one point at a time: for the points
+where the local ground was high enough the tree was in the field, and for the rest of the
+same tree it was not. Everything that decides a plant now reads the world at the plant's
+own base (`plant_base()`), which is the general rule in
+[gotchas.md](gotchas.md) "A plant decided per sample point is a plant cut in half". The
+cost is the interesting part: read naively it took the forest's brick build from 6 ms to
+55, and putting it behind each plant's bounding test and working out that `land_height`
+cancels out inside the stream's cut brought it to about 10.
+
+**The trees were on a grid from above**, and the cause was none of the three things that
+look like the cause. The 3x3 neighbour loop offset the sample point by a whole cell and
+then called `wp_repeat`, which is periodic, so the offset was eaten: every cell drew its
+nine neighbours' trees around *its own* centre, each one cut off at the cell boundary it
+crossed ([gotchas.md](gotchas.md) "Domain repetition loses the neighbour offset"). That is
+the grid, the clipping, and nine times the intended trees all at once, and it was in every
+scatter in every world. `wp_repeat_near()` fixes it; every acceptance rate in the forest
+and the monument valley was then re-tuned, because they had been set against the bug.
+
+The three changes below were made first and are kept, because each is true on its own once
+the placement is right. The
+jitter was half a cell, which leaves a band down every cell boundary no tree can occupy;
+it covers the whole cell now, and the 3x3 lookup stays sufficient because a crown is 31
+voxels against a 74-voxel cell. That was not enough on its own: one candidate to a cell is
+a stratified sample and stratified is not random, so there are `TREE_TRIES` of them at a
+third of the chance each. Nor was that enough on its own, because `grove_density` held one
+value per cell, which put the clumps on the lattice with square edges; every density in
+the world is now read at the plant's own position. Giants got the same treatment, and a
+density instead of the flat 42% chance they had. Moving the densities behind each plant's
+bound paid for the extra tries and then some: 10.1 ms a build frame to 8.5.
+
+**Waterfalls, and what makes a thing read as rare.** A cascade was already what the
+terracing produced, but every riser of every stream was one. What is there now is white
+water only where three things agree: the steepest part of a step, the middle of the
+channel, and a gorge stretch picked by one octave over a thousand voxels. The last is the
+rarity dial and nothing else could be, because the stream descends the whole way and is
+full of steps. 0.4% of the water is white, the falls are 10 to 15 voxels tall, and the bed
+drops away and the surface rides up over the lip under one so there is something to fall.
+It animates by scrolling its texture (`flow` in the block table), not by swaying: swaying
+a sheet of water pushes it into the blocks around it and flickers
+([gotchas.md](gotchas.md) "Animate flowing water with the texture, not the geometry").
+
+**Four species and three greens.** Birch joined the broadleaf, conifer and ancient: a
+slender white trunk with the dark dashes, a bare length of it under a light airy crown,
+and it likes the low open ground where the conifers do not. The canopy has three leaf
+blocks now, picked per tree and biased by species, because colour is what the eye sorts
+trees by at a distance and one green reads as one plant repeated.
+
+**How big a jellyfish is, is a question about the water.** The first cut assumed twenty
+voxels of depth and produced none at all, anywhere. Reading the chunk store found the
+answer: the forest's water is the stream's own cut and it is six to eight voxels deep,
+never more, so a jellyfish here is five to eight voxels across and three or four tall,
+wide rather than tall because width is the dimension it has room in. Measure the world
+before sizing something to fit in it.
 
 **Verify:** met. The preview shows no holes, so `WORLD_LIPSCHITZ` holds; the `grove`
 bench at 1080p held 120 Hz (interval p50 and p99 both 8.34) with `stream.holes` 0 and
@@ -210,9 +274,12 @@ level: `gpu.far.build` was 5.57 ms p50 in the grove with the vegetation survivin
 
 - [x] Block light flood fill in the mesh job, baked per quad corner beside AO
 - [x] Light reaches across chunk boundaries without seams (the 26 neighbours carry it)
-- [ ] The far field approximates it: not done. Past the near field a glowing mushroom is
-      sub-cell, and the light it casts is a fraction of a cell, so the far field draws the
-      block's own emission and nothing else. A forest of them does not tint the distance.
+- [x] The far field approximates it, in the far field rather than here: `gathered_light()`
+      in `src/far/far.wgsl` asks the cells touching a hit for their block's light level and
+      falls off by the distance in voxels, so an emitter reads at the fine levels and
+      disappears on its own at the coarse ones where a cell is wider than the light
+      travels. Not a flood fill: one cell of reach, and light passes through a thin wall
+      ([plan-far-field.md](plan-far-field.md) "Block light").
 
 **Verify:** met for the near field. `src/mesh/light_test.ts` checks the fall-off (one
 level a voxel, in every direction, out to the block's `light` value), that the light
@@ -293,6 +360,37 @@ against 2.03. Skipping the ray on faces turned away from the light took the grov
 2.36 to 2.03: under a canopy most surfaces face up, so it saves less than the half it
 looks like. The shadow is near-field only: the far field and the preview light their
 surfaces unshadowed, which past 512 voxels the fog covers.
+
+## The wood used to stop at a kilometre
+
+**Landed after the plan.** The forest gated its trees, giants and rocks on
+`sample_footprint`, and the far-field brick builder sets that to the clipmap level's cell
+size. At 4.4 voxels the gate meant the second clipmap level on had no trees in it, so the
+wood ended in a line about a kilometre out and the hills behind it were bare. The gate was
+cost control and it read as deletion
+([gotchas.md](gotchas.md) "A footprint gate deletes a feature from the far field").
+
+What is there now, in `src/worlds/forest.wgsl`:
+
+- Below `TREE_FOOTPRINT` a tree is a tree: trunk, branches, lobed crown, bites.
+- Between that and `TREE_FAR_FOOTPRINT` it is a crown ellipsoid and a trunk cylinder,
+  placed and sized from the same numbers so the swap moves nothing sideways. Two
+  primitives instead of a dozen, which is what a canopy can be at 8 to 32 voxel cells.
+- Past a footprint as wide as its own crown a tree goes, whatever the gates say. Below a
+  cell there is no way to draw it except inflated to one, and an inflated tree is a slab.
+- Giants keep a much finer gate (`GIANT_DETAIL_FOOTPRINT`) and a dome with no lip above
+  it. A cap is small, bright and thin-lipped, and quantised to a coarse cell it came out
+  as a flat neon plate over the canopy, wider than the mushroom and the loudest thing in
+  the frame. Boulders keep the fine gate too: a few voxels across, nothing to stand for.
+
+The rule the forest paid for: **a broad continuous feature survives being drawn coarsely,
+a small bright one does not.**
+
+Both of the things this left open are now closed, in the far field rather than here: a
+distant glowcap lights the cells around it (`gathered_light()` in `src/far/far.wgsl`), and
+the swap at each footprint dissolves across a dithered band instead of popping at a level
+boundary. Both are in [plan-far-field.md](plan-far-field.md), "Block light" and
+"The boundary between two levels".
 
 ## Open questions
 

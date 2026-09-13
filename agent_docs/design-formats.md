@@ -57,8 +57,8 @@ are never packed into the voxel itself; this keeps palettes small and lets prope
 change without rewriting chunks.
 
 The block table uploaded to shaders (`blockColorTable()`) is `BLOCK_TABLE_STRIDE`
-floats per block, `MAX_BLOCK_TYPES` of them, two `vec4f` in WGSL: block `id`'s colour is
-at `id * 2` and the rest at `id * 2 + 1`.
+floats per block, `MAX_BLOCK_TYPES` of them, three `vec4f` in WGSL: block `id`'s colour is
+at `id * 3`, its emission at `id * 3 + 1` and its flow at `id * 3 + 2`.
 
 | Floats | Field    | Notes                                                              |
 |--------|----------|--------------------------------------------------------------------|
@@ -66,12 +66,17 @@ at `id * 2` and the rest at `id * 2 + 1`.
 | 3      | coverage | 1 for opaque, the block's `alpha` for translucent; the translucent draw pass blends by it and the opaque one ignores it |
 | 4-6    | emission | added to the lit surface, then fogged with it                       |
 | 7      | sway     | how far the block's faces move in the wind, in voxels               |
+| 8      | flow     | tiles a second the block's texture scrolls down its faces; for water going over a drop, which moves without its geometry moving |
+| 9-11   | unused   | padding to three `vec4f`                                            |
 
 Emission has no tonemapping behind it: a lit surface plus emission past 1 clips to
 white and the block loses its colour, so emission stays small enough that the two
-together fit (a unit test checks it). The far-field colour table
-(`farColorTable()`) has the same stride and the same meaning, with solidity in place of
-coverage.
+together fit (a unit test checks it). The far-field colour table (`farColorTable()`) has
+the same stride and the same meaning with two differences: solidity in place of coverage,
+and float 7 is the block's **light level** (0 to `LIGHT_MAX`) rather than its sway. The
+far field has no mesh and so no baked light to read, so it works the light out at the hit
+from the levels of the blocks in the cells around it, and needs them in the table to do
+it. Nothing sways in the far field, which is what makes the slot free.
 
 A block's `light` is not in this table. It is a level (0 to `LIGHT_MAX`) the mesh job
 floods through the voxels around the block and bakes into the quads it touches

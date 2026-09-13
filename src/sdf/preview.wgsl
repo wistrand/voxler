@@ -17,7 +17,7 @@ struct World {
   grid_x: i32,
   grid_y: i32,
   grid_z: i32,
-  colors: array<vec4f, 512>, // MAX_BLOCK_TYPES x 2: color and coverage, emission and sway
+  colors: array<vec4f, 768>, // MAX_BLOCK_TYPES x 3: colour and coverage, emission and sway, flow
 }
 
 @group(1) @binding(0) var<uniform> world: World;
@@ -152,8 +152,8 @@ fn fs(in: VsOut) -> FsOut {
   let solid = wp_offset(p, n * -0.5);
   let id = select(world_material(solid), u32(s.y), s.y != 0.0);
   let known = min(id, 255u);
-  let albedo = world.colors[known * 2u].rgb;
-  let glow = world.colors[known * 2u + 1u].rgb;
+  let albedo = world.colors[known * 3u].rgb;
+  let glow = world.colors[known * 3u + 1u].rgb;
   out.color = vec4f(apply_fog(albedo * surface_light(n) + glow * albedo, dir, t), 1.0);
   let clip = camera.view_proj * vec4f(r, 1.0);
   out.depth = clamp(clip.z / clip.w, 0.0, 1.0);

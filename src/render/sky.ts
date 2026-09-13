@@ -76,8 +76,51 @@ const NIGHT: Sky = {
   stars: 1.0,
 };
 
-export const SKIES: Readonly<Record<string, Sky>> = { day: DAY, night: NIGHT };
+// High desert at midday. Two things set it apart from `day`: the air is clear, so the
+// far field carries for miles instead of dissolving a few thousand voxels out; and the
+// light is harder and warmer, which is what puts the near-black shadow on the east face
+// of every butte. The density is what the clipmap's reach can pay for rather than what
+// desert air actually is: the monument world marches 16,384 voxels, and the haze has to
+// have taken the view before the last level ends.
+const DESERT: Sky = {
+  name: "desert",
+  lightDir: [0.38, 0.88, 0.28],
+  lightColor: [1.0, 0.94, 0.82],
+  ambient: 0.26,
+  ambientSky: 0.18,
+  horizon: [0.78, 0.80, 0.82],
+  zenith: [0.16, 0.33, 0.66],
+  ground: [0.34, 0.22, 0.16],
+  fogDensity: 0.00014,
+  blockLight: 0.4,
+  disc: 0.0,
+  discCos: 0.9995,
+  discColor: [1.0, 0.97, 0.9],
+  haloCos: 0.97,
+  stars: 0.0,
+};
+
+export const SKIES: Readonly<Record<string, Sky>> = { day: DAY, night: NIGHT, desert: DESERT };
 export const DEFAULT_SKY = "day";
+
+// What is left of a surface at the far end of the view, under which drawing it and
+// drawing nothing are the same picture. `apply_fog()` mixes toward `sky_color(dir)` and
+// that is exactly what the sky pass puts behind a miss, so a hit this fogged differs from
+// a miss by this fraction of the gap between the surface and the sky: half a percent is
+// about one value in 8-bit.
+const FOG_RESIDUAL = 0.005;
+
+// How far the view carries before fog has taken it, in voxels. Fog is
+// `1 - exp(-dist * FOG_DENSITY)`, so this is where that reaches 1 - FOG_RESIDUAL.
+// Infinite for a world with no fog at all.
+//
+// This is the distance past which a clipmap level is marching for nothing, which makes
+// it the ceiling on the far field's reach: fog density and reach are one decision, not
+// two (CLAUDE.md "A new world", gotchas.md "A wider clipmap level can be cheaper").
+export function fogHorizonVoxels(sky: Sky): number {
+  if (!(sky.fogDensity > 0)) return Infinity;
+  return Math.log(1 / FOG_RESIDUAL) / sky.fogDensity;
+}
 
 function vec3(v: readonly [number, number, number]): string {
   return `vec3f(${v.map((c) => c.toFixed(5)).join(", ")})`;

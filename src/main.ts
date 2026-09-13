@@ -6,6 +6,8 @@ import { type BenchContext, BenchSession } from "./bench/session.ts";
 import { VoxelBench } from "./bench/voxel-bench.ts";
 import { FlyCamera } from "./camera/camera.ts";
 import { FlyControls } from "./camera/controls.ts";
+import { Follow, type FollowState, raiseHeight } from "./camera/follow.ts";
+import { Hud, type HudButton } from "./debug/hud.ts";
 import { Overlay } from "./debug/overlay.ts";
 import { CPU_FRAME, CPU_RENDER, CPU_UPDATE, Stats } from "./debug/stats.ts";
 import { formatCaps } from "./gpu/caps.ts";
@@ -23,13 +25,14 @@ import { fillBox, fillSphere, hasChunkOps, packChunkOps, setVoxel } from "./brus
 import { newRayHit, raycastVoxels } from "./world/raycast.ts";
 import { BRICK_WORDS, bricksPerChunkSide, tilesChunk } from "./far/reduce.ts";
 import { BRICK_CELLS, BrickGrid } from "./far/bricks.ts";
-import { DEFAULT_CLIPMAP_OPTIONS, MAX_LEVELS } from "./far/clipmap.ts";
+import { DEFAULT_CLIPMAP_OPTIONS, levelsForReach, MAX_LEVELS } from "./far/clipmap.ts";
 import { DEFAULT_FAR_SCALE } from "./far/far-field.ts";
 import { BRICK_JOB, FarEdits } from "./far/edits.ts";
 import { DEFAULT_ADAPT_OPTIONS, FarAdapt } from "./far/adapt.ts";
 import type { BrickJobOutput } from "./far/brick-job.ts";
 import { canShareMemory } from "./workers/buffers.ts";
 import { BLOCKS } from "./world/blocks.ts";
+import { voxelIndex } from "./world/coords.ts";
 import { ChunkStore } from "./world/store.ts";
 import { chunkKey, keyX, keyY, keyZ } from "./world/keys.ts";
 import { DEFAULT_MESH_OPTIONS, MESH_JOB, MeshScheduler } from "./world/mesh-scheduler.ts";
@@ -40,7 +43,7 @@ import { ChunkStreamer, DEFAULT_STREAM_OPTIONS, type StreamOptions } from "./wor
 import type { Voxelizer } from "./sdf/voxelizer.ts";
 import { runWorkerSelfTest } from "./workers/selftest.ts";
 import { DEFAULT_WORLD, type WorldProgram, WORLDS } from "./worlds/index.ts";
-import { DEFAULT_SKY, SKIES } from "./render/sky.ts";
+import { DEFAULT_SKY, fogHorizonVoxels, SKIES } from "./render/sky.ts";
 
 declare global {
   // Console handle for debugging, e.g. `voxler.gpu.device.destroy()` to test
@@ -50,6 +53,10 @@ declare global {
     renderer: Renderer | null;
     camera: FlyCamera;
     pool: WorkerPool;
+    // The fly controls and the follow flyover, so a flight can be set up from the
+    // console: `voxler.follow.speed = 60`, `voxler.follow.height = 40`.
+    controls?: FlyControls;
+    follow?: Follow;
     store?: ChunkStore;
     streamer?: ChunkStreamer;
     mesher?: MeshScheduler;
@@ -94,7 +101,7 @@ const CONTROLS_HELP = "drag: look (mouse or touch)  WASD move  Space/C up/down  
   "?glow=0 no emission  ?wind=0 no sway  ?light=0 no block light  ?shadow=0 no shadows\n" +
   `?sky=${Object.keys(SKIES).join("|")} overrides the world's own sky\n` +
   "?far=0 no far field  ?far=steps|bricks|levels debug view (F rebuilds it)  ?farScale=0.1..1\n" +
-  "?farLevels=n ?farFirst=k ?farBricks=n ?farSlabs=n ?farBeam=0  ?farAdapt=0  ?farCheck\n" +
+  "?farLevels=n ?farSize=n ?farFirst=k ?farBricks=n ?farSlabs=n ?farBeam=0  ?farAdapt=0  ?farCheck\n" +
   `?bench=${Object.keys(SCENES).join("|")}&runs=n benchmark`;
 
 const params = new URLSearchParams(location.search);
@@ -106,6 +113,10 @@ const params = new URLSearchParams(location.search);
 // `?preview=1` forces it on. `?cull=n` is a cull mask (0 none, 3 no occlusion, 7
 // all); `?cullCheck` compares the frame against an unculled draw every 30 frames.
 const meshesByDefault = params.get("stream") !== "0" && params.get("mesh") !== "0" && !params.has("voxelBench");
+// The init stages that stand between a sky and a world, in the order they are waited on
+// (`Renderer.init`). Named here so the panel can say which are outstanding.
+const WORLD_STAGES = ["voxelize", "near", "far"] as const;
+
 const view = {
   preview: params.get("preview") === "1" || (params.get("preview") !== "0" && !meshesByDefault),
   grid: false,
@@ -164,7 +175,14 @@ function selectWorld(): WorldProgram {
   const skyName = params.get("sky") ?? entry.sky ?? DEFAULT_SKY;
   const sky = SKIES[skyName] ?? SKIES[DEFAULT_SKY];
   if (!(skyName in SKIES)) overlay.error(`unknown sky "${skyName}"; known: ${Object.keys(SKIES).join(", ")}`);
-  return { name, code: entry.code, seed: Number.isInteger(seed) ? seed >>> 0 : 1, spawn: entry.spawn, sky };
+  return {
+    name,
+    code: entry.code,
+    seed: Number.isInteger(seed) ? seed >>> 0 : 1,
+    spawn: entry.spawn,
+    sky,
+    far: entry.far,
+  };
 }
 
 // `?size=1920x1080` renders at a fixed pixel size (stretched to the window).
@@ -185,6 +203,8 @@ function benchSession(): BenchSession | null {
     return null;
   }
   const runs = Math.min(MAX_BENCH_RUNS, Math.max(1, Math.floor(Number(params.get("runs")) || 1)));
+  // The overlay starts hidden, and a bench run's progress is the one thing worth showing.
+  overlay.show();
   return new BenchSession(scene, runs, world.spawn, () => overlay.setSection("bench", bench?.status() ?? ""));
 }
 
@@ -336,22 +356,47 @@ const shadows = params.get("shadow") !== "0";
 // level count, `?farBricks=n` the pool capacity in bricks, and `?farSlabs=n` how many
 // brick slabs are sampled per frame (phase 3).
 const farCheck = params.has("farCheck");
+// A world may widen or shorten the clipmap for itself (`far` in src/worlds/index.ts);
+// the switches below still win over what it asked for.
+const farDefaults = { ...DEFAULT_CLIPMAP_OPTIONS, ...world.far };
+// `?farSize=n` sets the bricks per side of every level, which is the reach of each
+// level at its own cell size: doubling it halves the cell size at a given distance.
+// Powers of two only; the clipmap rejects anything else.
+const farSize = intParam("farSize", farDefaults.size, 8, 128);
+const farFirst = intParam("farFirst", farDefaults.firstLevel, 1, 6);
+// Levels past the world's fog horizon march for nothing: what they find is mixed to the
+// sky colour the sky pass already drew. So the default level count is trimmed to the
+// horizon rather than taken as written. `?farLevels=n` overrides it outright, because a
+// measurement wants the setting it asked for.
+const farLevels = params.has("farLevels")
+  ? intParam("farLevels", farDefaults.levels, 1, MAX_LEVELS)
+  : Math.min(
+    farDefaults.levels,
+    levelsForReach(farSize, farFirst, fogHorizonVoxels(world.sky), MAX_LEVELS),
+  );
 const farOptions = {
   clipmap: {
-    ...DEFAULT_CLIPMAP_OPTIONS,
-    levels: intParam("farLevels", DEFAULT_CLIPMAP_OPTIONS.levels, 1, MAX_LEVELS),
-    firstLevel: intParam("farFirst", DEFAULT_CLIPMAP_OPTIONS.firstLevel, 1, 6),
-    bricks: intParam("farBricks", DEFAULT_CLIPMAP_OPTIONS.bricks, 4096, 1 << 20),
+    ...farDefaults,
+    size: farSize,
+    levels: farLevels,
+    firstLevel: farFirst,
+    bricks: intParam("farBricks", farDefaults.bricks, 4096, 1 << 20),
   },
   slabsPerFrame: intParam("farSlabs", 2, 1, 16),
   scale: numberParam("farScale", DEFAULT_FAR_SCALE, 0.1, 1),
 };
 // `?farBeam=0` turns the beam pre-pass off (plan-far-field phase 5).
 const farBeam = params.get("farBeam") !== "0";
-// The far field's reach and build budget follow what they cost on this machine
-// (src/far/adapt.ts). Off for `?farAdapt=0` and during a bench run: a reach that moves
-// under the measurement makes two results incomparable.
-const farAdapt = params.get("farAdapt") !== "0";
+// The far field's reach and build budget can follow what they cost on this machine
+// (src/far/adapt.ts), but only when asked: `?farAdapt=1`.
+//
+// Off by default because what it moves is visible. Dropping a clipmap level shortens the
+// world and rebuilds the level, and changing the march resolution rebuilds the target;
+// both land as a pop in the middle of the frame, with nothing the viewer did to cause
+// them. A controller that changes the picture while the camera is still has to be
+// imperceptible before it can be the default, and this one is not yet: over a minute
+// standing in one place it walked terrain from eight levels to five.
+const farAdapt = params.get("farAdapt") === "1";
 // The far field is on unless `?far=0` says otherwise; `?far=steps|bricks|levels` picks
 // a debug view (plan-far-field)
 // and picks its debug view. F rebuilds its bricks around the camera.
@@ -609,8 +654,30 @@ function frame(now: number): void {
 
   // A benchmark drives the camera only once there is something to render.
   stats.begin(CPU_UPDATE);
-  if (!bench) controls.update(dt);
-  else if (renderer) bench.drive(now, camera, renderer.timer);
+  if (bench) {
+    if (renderer) bench.drive(now, camera, renderer.timer);
+  } else if (following) {
+    // The controls run first and the flight picks up whatever they did, so dragging the
+    // view re-aims it and WASD nudges it sideways rather than being fought.
+    controls.update(dt);
+    // The keys that set the fly speed set the flight's, and the ones that fly up and down
+    // raise and lower it. Anything else and the camera would be pulled straight back to
+    // the height it was holding, which reads as the keys not working.
+    follow.speed = controls.speed;
+    const lift = controls.vertical;
+    if (lift !== 0) {
+      follow.height = raiseHeight(follow.height, lift * controls.speed * (controls.sprinting ? 3 : 1) * dt);
+    }
+    followState.x = camera.worldPosition(0);
+    followState.y = camera.worldPosition(1);
+    followState.z = camera.worldPosition(2);
+    followState.yaw = camera.yaw;
+    follow.step(followState, dt);
+    camera.setPosition(followState.x, followState.y, followState.z);
+    camera.setOrientation(followState.yaw, followState.pitch);
+  } else {
+    controls.update(dt);
+  }
   stats.end(CPU_UPDATE);
 
   if (gpu && renderer) {
@@ -645,6 +712,11 @@ function frame(now: number): void {
     );
     if (done) running = false;
   }
+
+  // The on-screen panel keeps its own slow tick, because it is up whether or not the
+  // overlay is.
+  hud.frame();
+  hud.refresh(now);
 
   // Overlay text is built outside the timed frame, a few times per second, and not
   // at all while the overlay is hidden.
@@ -747,7 +819,18 @@ async function start(): Promise<void> {
   overlay.setSection("world", `world  ${world.name}  seed ${world.seed}  compiling`);
   globalThis.voxler.gpu = gpu;
   globalThis.voxler.renderer = renderer;
+  // Say what is still compiling. A heavy world's pipelines take seconds, and until they
+  // land the frame is a sky with nothing under it, which looks like a hang rather than
+  // like work. Each stage records itself in `startup` as it finishes, so polling that on
+  // the panel's own tick needs nothing from the renderer.
+  const compiling = setInterval(() => {
+    if (gen !== generation) return;
+    const left = WORLD_STAGES.filter((name) => renderer.startup[name] === undefined);
+    hud.status(left.length === 0 ? "starting" : `compiling ${left.join(" ")}`);
+  }, 200);
   await renderer.worldReady;
+  clearInterval(compiling);
+  hud.status("");
   if (gen !== generation) return;
   overlay.setSection(
     "world",
@@ -785,6 +868,95 @@ try {
   resizeObserver.observe(canvas); // browsers without device-pixel-content-box
 }
 
+// The follow-the-ground flyover (src/camera/follow.ts). It reads the chunk store, so it
+// follows whatever the near field has streamed; outside that it holds its heading.
+const followState: FollowState = { x: 0, y: 0, z: 0, yaw: 0, pitch: 0 };
+const follow = new Follow((x, y, z) => {
+  const handle = store.handle(x >> 5, y >> 5, z >> 5);
+  if (handle < 0) return -1;
+  const chunk = store.read(handle);
+  if (chunk === null) return -1;
+  return chunk.get(voxelIndex(x & 31, y & 31, z & 31));
+});
+let following = false;
+
+function toggleFollow(): void {
+  following = !following;
+  if (!following) return;
+  followState.x = camera.worldPosition(0);
+  followState.y = camera.worldPosition(1);
+  followState.z = camera.worldPosition(2);
+  followState.yaw = camera.yaw;
+  followState.pitch = camera.pitch;
+  follow.start(followState);
+}
+
+// The switches, shared by the keys and by the on-screen panel so the two can never
+// disagree about what a toggle does.
+function togglePreview(): void {
+  view.preview = !view.preview;
+  const renderer = globalThis.voxler.renderer;
+  if (renderer) renderer.showPreview = view.preview;
+}
+
+function toggleGrid(): void {
+  view.grid = !view.grid;
+  const renderer = globalThis.voxler.renderer;
+  if (renderer) renderer.showGrid = view.grid;
+}
+
+function toggleMeshes(): void {
+  view.meshes = !view.meshes;
+  const renderer = globalThis.voxler.renderer;
+  if (renderer) renderer.showMeshes = view.meshes;
+}
+
+// The far field draws only where it has been built, so this is safe whether or not
+// `?far=0` kept it from initialising: `far.ready` still gates the pass.
+function toggleFar(): void {
+  const renderer = globalThis.voxler.renderer;
+  if (renderer) renderer.showFar = !renderer.showFar;
+}
+
+// Some switches are compiled into the shaders (the sky's constants are generated into
+// every pass that lights a surface, and shadows are a constant in the near field), so
+// they cannot be flipped on a running renderer. Reloading is the honest way to offer
+// them, and carrying the camera in `?at=` means the world comes back where it was.
+function reloadWith(key: string, value: string | null): void {
+  const next = new URLSearchParams(location.search);
+  if (value === null) next.delete(key);
+  else next.set(key, value);
+  next.set(
+    "at",
+    `${camera.worldPosition(0).toFixed(0)},${camera.worldPosition(1).toFixed(0)},${camera.worldPosition(2).toFixed(0)}`,
+  );
+  location.search = next.toString();
+}
+
+function currentSky(): string {
+  const name = params.get("sky") ?? world.sky.name;
+  return name in SKIES ? name : DEFAULT_SKY;
+}
+
+function cycleSky(): void {
+  const names = Object.keys(SKIES);
+  reloadWith("sky", names[(names.indexOf(currentSky()) + 1) % names.length]);
+}
+
+globalThis.voxler.controls = controls;
+globalThis.voxler.follow = follow;
+
+const hud = new Hud(document.body, [
+  { label: "sky", title: "Day, night or desert. Reloads: the sky is compiled into the shaders", on: () => true, press: cycleSky },
+  { label: "far", title: "Far field (the ray-marched distance)", on: () => globalThis.voxler.renderer?.showFar ?? false, press: toggleFar },
+  { label: "shadow", title: "Shadows. Reloads: it is a shader constant", on: () => shadows, press: () => reloadWith("shadow", shadows ? "0" : null) },
+  { label: "mesh", title: "Near-field meshes (M)", on: () => view.meshes, press: toggleMeshes },
+  { label: "sdf", title: "SDF preview (P)", on: () => view.preview, press: togglePreview },
+  { label: "grid", title: "Chunk grid (G)", on: () => view.grid, press: toggleGrid },
+  { label: "follow", title: "Fly along whatever is under the camera, a stream for instance (K)", on: () => following, press: toggleFollow },
+  { label: "stats", title: "Debug overlay (F2)", on: () => overlay.visible, press: () => overlay.toggle() },
+] satisfies HudButton[]);
+
 addEventListener("keydown", (e) => {
   if (e.ctrlKey || e.metaKey || e.altKey || e.repeat) return;
   const renderer = globalThis.voxler.renderer;
@@ -794,16 +966,16 @@ addEventListener("keydown", (e) => {
       overlay.toggle();
       break;
     case "KeyP":
-      view.preview = !view.preview;
-      if (renderer) renderer.showPreview = view.preview;
+      togglePreview();
       break;
     case "KeyG":
-      view.grid = !view.grid;
-      if (renderer) renderer.showGrid = view.grid;
+      toggleGrid();
       break;
     case "KeyM":
-      view.meshes = !view.meshes;
-      if (renderer) renderer.showMeshes = view.meshes;
+      toggleMeshes();
+      break;
+    case "KeyK":
+      toggleFollow();
       break;
     case "KeyE":
       if (toolRay()) tool.place(toolHit);

@@ -26,6 +26,10 @@ export interface BlockType {
   // down and reads as its own color whatever is lighting it
   // (plan-living-world.md phase 1).
   readonly emission?: readonly [number, number, number];
+  // Tiles a second the block's texture scrolls down its faces. For water going over a
+  // drop: motion the eye reads without the geometry moving, which is the difference
+  // between a waterfall and a sheet of quads flickering against its neighbours.
+  readonly flow?: number;
   // How far the block's faces sway in the wind, in voxels (plan-living-world phase 2).
   readonly sway?: number;
   // How brightly the block lights what is around it, 0 (not a light) to LIGHT_MAX.
@@ -42,8 +46,8 @@ export const LIGHT_MAX = 15;
 
 // Size of the color table uploaded to shaders; ids at or above it render as id 0.
 export const MAX_BLOCK_TYPES = 256;
-// f32 per block in that table: color and coverage, then emission and sway.
-export const BLOCK_TABLE_STRIDE = 8;
+// f32 per block in that table: color and coverage, then emission and sway, then flow.
+export const BLOCK_TABLE_STRIDE = 12;
 export const BLOCK_TABLE_FLOATS = MAX_BLOCK_TYPES * BLOCK_TABLE_STRIDE;
 
 export const BLOCKS: readonly BlockType[] = [
@@ -72,6 +76,25 @@ export const BLOCKS: readonly BlockType[] = [
     far: [0.42, 0.55, 0.78],
   },
   { id: 11, name: "glass", color: [0.8, 0.9, 0.95], opaque: false, texture: ["glass", "glass", "glass"], alpha: 0.35 },
+  // Falling water: the face of a cascade, where the stream goes over a terrace riser.
+  // Whiter and less see-through than still water, because that is what broken water is,
+  // and it sways further than any plant in the world: the sway is the only motion the
+  // engine has and a sheet of water is the thing in the scene most obviously in motion.
+  {
+    id: 26,
+    name: "whitewater",
+    color: [0.78, 0.88, 0.96],
+    // Opaque, unlike the still water it runs into. Broken water is not see-through, and
+    // a translucent sheet sitting in the same voxels as the stream sorts against it
+    // differently frame to frame, which is a flicker.
+    opaque: true,
+    texture: ["whitewater", "whitewater", "whitewater"],
+    far: [0.72, 0.82, 0.92],
+    // It flows rather than sways. Moving the faces of a sheet of water pushes them into
+    // the blocks around it; scrolling the texture down them is the same motion with none
+    // of that (gotchas.md "Animate flowing water with the texture, not the geometry").
+    flow: 1.1,
+  },
   // The first emissive block: a glowing mushroom cap, for plan-living-world phase 1.
   // The emission is under 1 on purpose. There is no tonemapping, so anything that
   // takes a lit surface past 1 clips to white and the block loses its color; this
@@ -126,6 +149,70 @@ export const BLOCKS: readonly BlockType[] = [
   // Ferns sway further than a canopy does: they are fronds, not branches.
   { id: 18, name: "fern", color: [0.26, 0.53, 0.21], opaque: true, texture: ["fern", "fern", "fern"], sway: 0.35 },
   { id: 19, name: "moss", color: [0.22, 0.42, 0.20], opaque: true, texture: ["moss", "moss", "moss"] },
+  // Monument Valley (src/worlds/monument.wgsl). The colours are the real stratigraphy's:
+  // iron oxide reddens everything, and manganese oxide is what darkens the caprock.
+  {
+    id: 20,
+    name: "redsand",
+    color: [0.72, 0.42, 0.28],
+    opaque: true,
+    texture: ["redsand", "redsand", "redsand"],
+  },
+  // Organ Rock: dark red-brown siltstone, and the only layer here that erodes to a
+  // slope rather than a cliff, which is what puts a skirt round the foot of every butte.
+  {
+    id: 21,
+    name: "organrock",
+    color: [0.55, 0.29, 0.21],
+    opaque: true,
+    texture: ["organrock", "organrock", "organrock"],
+  },
+  // De Chelly: the massive wind-blown sandstone that makes the cliffs, pale orange to
+  // reddish brown and cross-bedded.
+  {
+    id: 22,
+    name: "sandstone",
+    color: [0.78, 0.48, 0.31],
+    opaque: true,
+    texture: ["sandstone", "sandstone", "sandstone"],
+  },
+  // Shinarump: the thin hard cap that is the reason the butte under it still stands.
+  {
+    id: 23,
+    name: "caprock",
+    // Light enough to still read as rock on a face the sun never reaches. At 0.42 it
+    // went to 28/255 under the desert sky's ambient alone, which is a hole in the
+    // silhouette rather than a caprock.
+    color: [0.56, 0.47, 0.42],
+    opaque: true,
+    texture: ["caprock", "caprock", "caprock"],
+  },
+  // Desert scrub: grey-green, not leaf green. A saltbush on red sand is nearly the same
+  // value as the sand it stands on, which is why the floor reads as empty from a
+  // distance and not as a lawn.
+  { id: 24, name: "sage", color: [0.40, 0.43, 0.31], opaque: true, texture: ["sage", "sage", "sage"] },
+  // Two more greens for the canopy. A wood where every tree wears the same leaf reads as
+  // one plant repeated however varied the shapes are, and the colour is what the eye
+  // sorts trees by at a distance.
+  { id: 27, name: "leaves-dark", color: [0.15, 0.31, 0.17], opaque: true, texture: ["leaves-dark", "leaves-dark", "leaves-dark"], sway: 0.2 },
+  { id: 28, name: "leaves-pale", color: [0.44, 0.60, 0.26], opaque: true, texture: ["leaves-pale", "leaves-pale", "leaves-pale"], sway: 0.2 },
+  // Birch bark: near-white with the dark dashes that are the whole reason a birch is
+  // recognisable from across a wood.
+  { id: 29, name: "birch", color: [0.86, 0.86, 0.81], opaque: true, texture: ["birch", "birch", "birch"] },
+  // A jellyfish's bell, hanging in the forest's lakes. Opaque rather than translucent
+  // on purpose: it sits inside water that is already translucent, and two translucent
+  // surfaces one behind the other is a sorting problem for something six voxels across.
+  // It sways further than anything on land, because what it is doing is drifting.
+  {
+    id: 25,
+    name: "jelly",
+    color: [0.55, 0.82, 0.95],
+    opaque: true,
+    texture: ["jelly", "jelly", "jelly"],
+    emission: [0.18, 0.48, 0.58],
+    light: 11,
+    sway: 0.7,
+  },
 ];
 
 // Light level each block gives off, indexed by any u16 id, 0 for everything that is
@@ -168,7 +255,16 @@ export const BLOCK_TRANSLUCENT: Uint8Array = (() => {
 
 // `const BLOCK_STONE: u32 = 1u;` and so on, one per block.
 export function blockConstantsWgsl(): string {
-  return BLOCKS.map((b) => `const BLOCK_${b.name.toUpperCase()}: u32 = ${b.id}u;`).join("\n") + "\n";
+  // A block's name becomes a WGSL identifier, so anything that is not one becomes an
+  // underscore: `leaves-dark` is `BLOCK_LEAVES_DARK`. Without this a hyphenated name
+  // compiles to `BLOCK_LEAVES-DARK` and every shader that includes the block constants
+  // fails to parse, which is every shader that evaluates a world.
+  return BLOCKS.map((b) => `const BLOCK_${wgslName(b.name)}: u32 = ${b.id}u;`).join("\n") + "\n";
+}
+
+// The WGSL constant suffix for a block name.
+export function wgslName(name: string): string {
+  return name.toUpperCase().replace(/[^A-Z0-9]/g, "_");
 }
 
 // Texture layer per block id and face (quad.ts face order: +X, -X, +Y, -Y, +Z, -Z),
@@ -209,6 +305,7 @@ export function blockColorTable(out: Float32Array, offset: number): void {
       out[i + 6] = e[2];
     }
     out[i + 7] = b.sway ?? 0;
+    out[i + 8] = b.flow ?? 0;
   }
 }
 
@@ -220,7 +317,11 @@ function layerAverage(data: TextureData, layer: number, out: Float32Array, at: n
 }
 
 // Far-field color table (plan-far-field phase 2), BLOCK_TABLE_STRIDE floats per block
-// at `offset`, laid out like the near field's table: color and solidity, then emission.
+// at `offset`, laid out like the near field's table: color and solidity, then emission
+// and, where the near field's table keeps the sway, the block's light level. The far
+// field has no baked light to read (that lives in the mesh, and the far field has no
+// mesh), so it works the light out at the hit from the emitters in the cells around it
+// and needs their levels to do it (src/far/far.wgsl `gathered_light`).
 // Alpha is 1 exactly where BLOCK_FAR_SOLID says the id is solid, so the two
 // brick builders (src/far/reduce.ts on the CPU, far-build.wgsl on the GPU) decide
 // solidity by one rule and neither needs its own opacity table.
@@ -242,6 +343,7 @@ export function farColorTable(out: Float32Array, offset: number, textures: Textu
     const i = offset + b.id * BLOCK_TABLE_STRIDE;
     const e = b.emission;
     if (e !== undefined) for (let c = 0; c < 3; c++) out[i + 4 + c] = e[c];
+    out[i + 7] = b.light ?? 0;
     if (b.far !== undefined) {
       for (let c = 0; c < 3; c++) out[i + c] = b.far[c];
     } else if (textures !== null) {

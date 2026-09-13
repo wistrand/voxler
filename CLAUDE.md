@@ -55,11 +55,11 @@ coarse levels, marched level by level in compute at half resolution behind a bea
 pre-pass, and composited behind the near field, which wins every pixel it drew (depth)
 and every chunk it is drawing (a coverage mask). The march costs 0.59 ms p50 at 1080p
 over the flyover bench. It is on by default (`?far=0` turns it off) and stays a plan
-file rather than an architecture doc for now. How far it reaches is not a constant: a
-controller watches what the march and the brick sampling actually cost on this machine
-and moves the slab budget, the level count and the march resolution, in that order, to
-fit whatever the display's frame period has left once every other pass is paid
-(`src/far/adapt.ts`). Its clipmap is also what shadow rays
+file rather than an architecture doc for now. How far it reaches is fixed by default. A
+controller that watches what the march and the brick sampling cost and moves the slab
+budget, the level count and the march resolution to fit the frame exists
+(`src/far/adapt.ts`, `?farAdapt=1`), but it is not the default: what it moves is visible
+while the camera is still. Its clipmap is also what shadow rays
 march ([plan-living-world.md](agent_docs/plan-living-world.md) phase 5), so turning the
 far field off turns shadows off with it.
 The living world is done: emissive blocks, wind in the vertex stage, the forest world
@@ -80,12 +80,14 @@ plan tracks its own phases; update the status column when a plan starts or lands
 | 6     | [plan-far-field.md](agent_docs/plan-far-field.md)           | brickmap clipmap, compute ray march, composite, far-field edits        | done        |
 | 7     | [plan-world-modelling.md](agent_docs/plan-world-modelling.md) | brushes (SDF, CSG, voxel), placement, the edit journal, regeneration | done        |
 | 8     | [plan-living-world.md](agent_docs/plan-living-world.md)     | emissive materials, motion, a fantasy forest world, block light, night and shadows | done |
+| 9     | [plan-monument-valley.md](agent_docs/plan-monument-valley.md) | the Monument Valley buttes as a world program, and the far field seen across a kilometre | in progress |
 
 The renderer plans are built and plan-living-world has landed: what the engine draws
-rather than how fast it draws it. What it left open is in that plan's phases 4 and 5 (the
-far field has no block light and no shadows, and every light in the world shares one
-colour) and in the grove bench, which no longer holds 120 Hz now that it walks through
-the wood rather than under it.
+rather than how fast it draws it. What it left open is in that plan's phases 4 and 5
+(every light in the world shares one colour, and the far field casts no shadows; it does
+have block light now, gathered at the hit rather than baked, see
+[plan-far-field.md](agent_docs/plan-far-field.md) "Block light") and in the grove bench,
+which no longer holds 120 Hz now that it walks through the wood rather than under it.
 
 Plans interleave: plan-sdf-generation phases 1-2 need only the foundation; its
 phase 3 needs plan-voxel-data phases 1-2, and its phase 4 needs plan-far-field
@@ -106,7 +108,7 @@ today `src/gpu/`, `src/render/`, `src/camera/`, `src/util/`, `src/debug/`,
 | Path             | Role                                                           |
 | ---------------- | -------------------------------------------------------------- |
 | `src/main.ts`    | entry point, frame loop                                        |
-| `src/camera/`    | fly camera state (pure) and input controls                     |
+| `src/camera/`    | fly camera state (pure), input controls, and the follow flyover |
 | `src/gpu/`       | device setup, caps probe, pipeline and resource helpers        |
 | `src/world/`     | block registry, chunk container, chunk table, streaming, mesh scheduling |
 | `src/sdf/`       | WGSL SDF library, GPU voxelizer, sphere-traced preview         |
@@ -158,8 +160,8 @@ open, start Chrome with `--remote-debugging-port=9222` and add
 `--browserUrl http://127.0.0.1:9222` to the server's args instead of
 `--isolated`.
 
-URL switches: `?world=<name>&seed=<n>` picks the world program (`showcase`, `terrain`, `forest`;
-default `showcase`); `?defaultLimits` requests no raised limits (tests the default-limits
+URL switches: `?world=<name>&seed=<n>` picks the world program (`showcase`, `terrain`, `forest`,
+`monument`; default `showcase`); `?defaultLimits` requests no raised limits (tests the default-limits
 invariant); `?at=x,y,z` starts the camera at a world position; `?workers=n` sets
 the pool size; `?workerTest` runs the worker pool self-test into the overlay;
 `?jobBatch=n` caps jobs per worker message (1 disables batching);
@@ -181,31 +183,44 @@ sizes the near-field quad arena (default 64); `?ao=0` meshes and draws without
 baked AO (the phase 5 A/B; it also drops the mesh job back to 6 neighbors); `?tex=0`
 draws flat block colors instead of sampling the block textures; `?glow=0` drops block
 emission, `?wind=0` holds swaying blocks still, `?light=0` meshes and draws without block
-light and `?shadow=0` stops marching shadow rays; `?sky=<day|night>` overrides the
+light and `?shadow=0` stops marching shadow rays; `?sky=<day|night|desert>` overrides the
 world's own sky and lighting preset (`src/render/sky.ts`); `?far=0` turns the far
 field off (it is on by default) and `?far=steps|bricks|levels` picks a debug view
 (F queues every clipmap level again);
 `?farLevels=n` sets how many levels are allocated (and so the most the clipmap can
-reach), `?farFirst=k` the finest level's cell size (2^k voxels), `?farBricks=n` the
+reach), overriding the default, which is the world's own count trimmed to the distance
+its fog closes the view at (`fogHorizonVoxels()` in `src/render/sky.ts`: levels past it
+march for a result the sky pass already drew); `?farSize=n` the bricks per side of every level (a power of two: a wider level
+means a finer cell at a given distance and fewer level crossings, paid for in bricks),
+`?farFirst=k` the finest level's cell size (2^k voxels), `?farBricks=n` the
 brick pool capacity, `?farSlabs=n` the brick slabs sampled per frame to start from,
 `?farScale=0.1..1` the march resolution as a fraction of the frame (1 by default; below
 it a terrace's top face is thinner than the sampling and distant contour lines break up)
-and `?farBeam=0` turns the beam pre-pass off; `?farAdapt=0` stops the far field moving its own reach and
-slab budget and march resolution to fit what is left of the frame after every other pass
-(`src/far/adapt.ts`),
-which it otherwise does on every machine except during a bench run; `?farCheck` compares the sampled bricks
+and `?farBeam=0` turns the beam pre-pass off; `?farAdapt=1` lets the far field move its own
+reach, slab budget and march resolution to fit what is left of the frame after every
+other pass (`src/far/adapt.ts`); it is off by default because what it moves is visible
+while the camera is still, and a bench run forces it off whatever the switch says; `?farCheck` compares the sampled bricks
 against the same region reduced from resident chunk data; `?preview=1`
 forces the SDF preview on (it starts off while meshes are drawn, and its pipelines are
 built the first time it is switched on, not at startup). Look by dragging
 (mouse or touch); the wheel flies towards and away from whatever the cursor is over
 (not along the view: a thing can be approached without turning to face it), and +/-
-change the speed. Keys:
-F2 overlay,
+change the speed. On-screen: a small panel top right with the frame rate, the switches worth reaching for
+(sky, far field, shadows, meshes, SDF preview, chunk grid, the follow flyover, the debug
+overlay) and, while a world is still compiling its pipelines, which stages are
+outstanding. The switches that are compiled into the shaders (the sky and shadows) reload
+the page carrying the camera in `?at=`; the rest flip on the running renderer.
+Keys:
+F2 overlay (it starts hidden; an error or a bench run opens it),
+K follow flyover (`src/camera/follow.ts`: picks up whatever is under the camera and flies
+along it, which over a stream follows the stream; while it runs, +/- set its speed,
+Space/C raise and lower it, and dragging re-aims it, all through the same keys that fly
+the camera by hand),
 P SDF preview, G grid, M meshes, F rebuild far-field bricks; editing: E place, Q remove, R rotate (Shift+R the
 other way), B block, X shape, Z undo, Y redo, aimed by the camera ray (overlay `edit`
 line).
-Console handle: `voxler` (`gpu`, `renderer`, `camera`, `pool`, `store`, `streamer`,
-`mesher`, `brushes`, `tool`, `edit`). Edits are made with the keys above, through
+Console handle: `voxler` (`gpu`, `renderer`, `camera`, `controls`, `follow`, `pool`,
+`store`, `streamer`, `mesher`, `brushes`, `tool`, `edit`). Edits are made with the keys above, through
 `voxler.tool` (`apply`, `place`, `remove`, `undo`, `redo`), or through `voxler.edit`
 (`csgSphere` places a field brush), e.g.
 `voxler.edit.fillBox(voxler.brushes, x0, y0, z0, x1, y1, z1, id)`; the returned id
@@ -228,6 +243,7 @@ near the camera that should be resident but weren't (0 means streaming kept up).
 - Plans: see the Status table above.
 - [agent_docs/design-formats.md](agent_docs/design-formats.md): coordinate spaces, chunk storage, packed quad, cluster descriptor, chunk table, camera uniform, world program contract, brick layout. Read before changing any encoder, WGSL decode, or world file.
 - [agent_docs/research-voxel-rendering.md](agent_docs/research-voxel-rendering.md): options weighed for meshing, draw submission, culling, far field, SDF generation, language; why each choice won.
+- [agent_docs/research-voxel-engine-comparison.md](agent_docs/research-voxel-engine-comparison.md): how voxler sits against other voxel engines, and a ranked list of techniques from them worth borrowing for the far field.
 - [agent_docs/research-webgpu-support.md](agent_docs/research-webgpu-support.md): dated snapshot of WebGPU support per browser and OS, optional features, limits, Linux dev setup. Re-check before relying on version numbers.
 - [agent_docs/gotchas.md](agent_docs/gotchas.md): JS, worker, WebGPU, and WGSL traps. Skim before touching workers, uploads, shaders, or the frame loop.
 
@@ -410,6 +426,13 @@ away here:
 - A new world is `src/worlds/<name>.wgsl` plus one line in `WORLDS`
   (`src/worlds/index.ts`), following design-formats.md "World program". Check it
   in the preview (P) first: an underestimated `WORLD_LIPSCHITZ` shows as holes there.
+  That line also carries the world's sky preset and, when the defaults do not suit it,
+  its clipmap (`far`). Reach, cell size and fog density are one decision and not three:
+  the fog has to have taken the view before the last level ends
+  ([gotchas.md](agent_docs/gotchas.md) "A wider clipmap level can be cheaper than a
+  narrower one"). The level count asked for here is a ceiling, trimmed at startup to the
+  world's fog horizon; the direction that is not automatic is the other one, a world whose
+  reach is shorter than its fog, which cuts visibly and needs thicker air.
   A new block type is one entry in `BLOCKS` (`src/world/blocks.ts`); worlds see it as
   `BLOCK_<NAME>`. A block that glows carries an `emission` colour, added to the lit
   surface by the near field, the preview and the far field alike; keep it small enough
@@ -417,6 +440,47 @@ away here:
   clip to white. A block that lights its neighbours carries `light`, a level 0 to
   `LIGHT_MAX` that falls by one a voxel and is flood filled in the mesh job and baked
   into the quads around it.
+- Whether a placed object exists, what kind it is and how big it is are properties of the
+  *object*, so read the world at the object's own base, never at the point being shaded.
+  A world function sees one point at a time; a test that varies across a tree's own
+  footprint puts the tree in the field for some of its voxels and not others, and what
+  that looks like is a tree cut in half along a contour
+  ([gotchas.md](agent_docs/gotchas.md) "A plant decided per sample point is a plant cut in
+  half"). Only the object's *shape* may depend on the point being asked about. Put the
+  read behind the object's bounding test, because it runs per object per sample, and make
+  the threshold a ramp rather than a line or the edge of the population is a contour too.
+- Use `wp_repeat_near()` (`src/sdf/lib.wgsl`) for the neighbour cells in a 3x3 scatter
+  loop, never plain `wp_repeat()`. `wp_repeat` is periodic and the loop offsets the point
+  by whole periods, so it hands back the same number every iteration and the neighbours'
+  objects land on the sample's own cell: nine objects to a cell, each cut off at the cell
+  boundary it crosses ([gotchas.md](agent_docs/gotchas.md) "Domain repetition loses the
+  neighbour offset"). Getting this right divides a scatter's population by nine, so the
+  acceptance rates are tuned after it, never before.
+- A scatter on a lattice needs three more things or it still reads as a grid, and all
+  three are needed: the jitter covers the whole cell (half a cell leaves a band down every
+  boundary nothing can occupy, and the budget to respect is the object's reach against the
+  cell, not the jitter against it); there are *several* tries to a cell at a fraction of
+  the chance each, because one per cell is a stratified sample and stratified is not
+  random; and the density is a field read at the candidate's own position, never one value
+  per cell, or the clumps have square edges
+  ([gotchas.md](agent_docs/gotchas.md) "One per cell is a grid, whatever the jitter").
+  Read the density behind the object's bounding test and the extra tries pay for
+  themselves.
+- Something suspended inside a solid is a material, not a shape. A jellyfish in a lake or
+  an ore in rock adds nothing to the union: the field has already called those voxels
+  solid, so putting the shape in the union only fights the surrounding solid over which
+  of the two is more deeply inside, and the surrounding solid usually wins. Return its
+  distance, test the sign, and swap the block id
+  ([plan-living-world.md](agent_docs/plan-living-world.md) phase 3).
+- A world's `sample_footprint` gates change what a feature *is*, never whether it exists.
+  The far-field builder sets the footprint to the clipmap level's cell size, so
+  `if (sample_footprint <= X) { place trees }` means the far field has no trees past X,
+  and the wood ends in a line ([gotchas.md](agent_docs/gotchas.md) "A footprint gate
+  deletes a feature from the far field"). Swap to a cheaper stand-in at the detail
+  footprint and drop the feature only once it is narrower than a cell, because below that
+  it can only be drawn inflated to one. A broad continuous feature (a canopy) survives
+  being drawn coarsely; a small bright one (a glowing cap) becomes a cell-sized lantern,
+  so it needs a much finer gate.
 - A world names a sky and lighting preset from `SKIES` (`src/render/sky.ts`); unset
   means `DEFAULT_SKY`. The preset is generated into WGSL and prepended to every shader
   that lights or fogs a surface, so it is the one lighting model with different numbers

@@ -68,6 +68,21 @@ fn wp_repeat_id(p: WorldPoint, period: vec3i) -> vec3i {
   return floor_div(p.cell, period);
 }
 
+// Position relative to the object in a *neighbouring* repeated cell, for the usual
+// 3x3 loop: `q` is the sample point already offset by `-shift`, and `shift` is that
+// offset, a whole number of periods.
+//
+// This exists because the obvious way to write it is silently wrong, and it is wrong in
+// exactly the way that makes a scatter look like a grid. `wp_repeat` is periodic, so
+// offsetting the point by a whole period before calling it hands back the *same* number:
+// the neighbour's object comes out placed around the sample's own cell instead of around
+// its own. Nine objects crowd onto every cell centre, each one visible only while the
+// sample point is inside that cell, so every object that reaches past a cell boundary is
+// cut off at it (gotchas.md "Domain repetition loses the neighbour offset").
+fn wp_repeat_near(q: WorldPoint, period: vec3i, shift: vec3i) -> vec3f {
+  return wp_repeat(q, period) + vec3f(shift);
+}
+
 // Lattice coordinates at a wavelength of 2^k voxels: exact integer lattice cell
 // plus a fraction in [0, 1). k must be at most 30.
 struct Lattice {

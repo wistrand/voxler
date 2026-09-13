@@ -373,6 +373,34 @@ the build cost; it is not wired up that way yet.
   right number is for a world with more caves than this one is unmeasured.
 - **Temporal reprojection.** Would let the pass march fewer pixels per frame. Not
   needed: half resolution and the beam brought the march to 0.59 ms p50 at 1080p.
+- **The boundary between two levels.** Open, and one thing ruled out. Each level's window is a camera-centred
+  box, so the distance at which a ray gives up one level for the next was the same for
+  every pixel, and that is a circle drawn on the world: a step in blockiness in terrain,
+  and in the forest a ring where a footprint-gated feature stops existing
+  ([gotchas.md](gotchas.md) "A footprint gate deletes a feature from the far field").
+  Dithering it was tried and taken out: the two levels do not hold the same world, so
+  inside the band the level a ray did not pick shows through the gaps in the one it did,
+  and moving, the band sweeps and the far field boils
+  ([gotchas.md](gotchas.md) "Dithering a level boundary shows both levels at once"). The
+  hard boundary is coherent, which beats soft when the two sides disagree about what is
+  there. Blending would work and means marching both levels near the boundary, which is
+  the cost the level walk exists to avoid; whether it is worth paying near the boundary
+  only is the open part.
+
+- **Block light.** Settled, approximately. The near field bakes a light level per quad
+  corner in the mesh job; the far field has no mesh, so it had no block light at all and a
+  glowing mushroom past the near field lit nothing around it, which is a ring in
+  brightness at the seam in a world whose lights are most of what lights anything.
+  `gathered_light()` in `src/far/far.wgsl` asks the twenty-six cells touching the hit for
+  their block's light level (carried in the far colour table's spare slot, see
+  [design-formats.md](design-formats.md)) and falls off by the distance *in voxels*, so
+  the same emitter reads as a bright neighbour at two-voxel cells and as nothing at all at
+  thirty-two, which is the right answer at both ends. It runs at the hit, not per step, so
+  it costs nothing on a ray that finds nothing. Three ways it is not the near field's
+  answer: its reach is one cell rather than `LIGHT_MAX` voxels, it does not flood so light
+  passes through a thin wall, and it has no ambient occlusion to sit under. It is close
+  enough that the seam stops showing.
+
 - **How far to reach.** Settled twice over. First as a constant: eight levels from
   k = 1, reaching 32,768 voxels, which is CLAUDE.md's far-field view distance. Measured
   against five levels at one camera (1920x1080, horizon view): the march goes 0.79 ms to
@@ -381,7 +409,19 @@ the build cost; it is not wired up that way yet.
   is solid throughout and costs no pool slot, but not in march time: eight levels march
   in nearly twice what five do.
 
-  Then as a controller, which is what the constant could not be: eight levels is right
+  Then as a ceiling the world's own fog sets, which is the part that needs no controller
+  at all. `apply_fog()` mixes toward `sky_color(dir)`, and that is exactly what the sky
+  pass puts behind a miss, so a hit whose extinction is 99.5% differs from drawing nothing
+  by about one value in 8-bit. Everything the clipmap reaches past that is marched for a
+  result nobody can see. `fogHorizonVoxels()` (`src/render/sky.ts`) is
+  `ln(200) / FOG_DENSITY`: 15,134 voxels for `day`, 10,594 for `night`, 37,875 for the
+  clear `desert`. `levelsForReach()` turns that into a level count, and the allocated
+  count is the world's own trimmed to it, so terrain and forest allocate seven levels
+  rather than eight. Measured back to back at a horizon camera: 5.37 ms p50 at eight
+  levels, 5.11 at seven, and 256 slabs a rebuild down to 224. `?farLevels=n` still
+  overrides it outright, because a measurement wants the setting it asked for.
+
+  Then as a controller, which is what neither of those can be: eight levels is right
   for this GPU and a guess anywhere else. `src/far/adapt.ts` watches what the march and
   the brick sampling cost, once a second, and moves two things to fit the budget. The
   order matters and is the whole design:
@@ -432,6 +472,16 @@ the build cost; it is not wired up that way yet.
   passes are excluded from "what every other pass costs": subtracting them would make the
   reference move with the thing being controlled, so shrinking the far field would grow
   the leftover and grow it straight back.
+- **Stopping at the near field's coverage was wrong at silhouettes.** The march used to
+  stop dead at the first cell inside a chunk the near field draws. Coverage is per
+  32-voxel chunk, so along a silhouette a ray grazes a covered chunk the raster pass never
+  filled, and stopping there left the sky showing through in a staircase down the edge.
+  It now marches past such cells: the pass's depth test has already found the pixel empty,
+  so the near field has nothing on this ray. The old reasoning, that marching past would
+  surface the ray again at the edge of the meshed region as a line of side faces, did not
+  happen: 1,200 pixels changed in the whole frame, all at silhouettes, and the terrain
+  world's near/far boundary is unchanged ([gotchas.md](gotchas.md) "The near field's
+  coverage is a chunk, not a pixel").
 - **Coarse levels from finer ones, rather than sampled.** Rejected. Sampling every level
   from the SDF does cost eight times the field evaluations, and `reduce_bricks` can
   build a brick from the eight under it, but not the bricks that need building: a slab

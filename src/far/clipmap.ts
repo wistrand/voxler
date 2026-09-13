@@ -49,6 +49,24 @@ export const DEFAULT_CLIPMAP_OPTIONS: ClipmapOptions = {
   bricks: 49152, // 27 MiB; terrain uses 39,564 of them and the forest 12,741, and drops are counted
 };
 
+// The fewest levels whose outermost one reaches `reachVoxels`. A level's window is
+// camera-centred, so its reach is half its extent. Clamped to [1, maxLevels]: a world
+// whose fog never closes asks for more levels than exist and gets the ceiling.
+//
+// Used to trim the allocated level count to the world's fog horizon
+// (`fogHorizonVoxels()` in src/render/sky.ts). Levels past it march for nothing.
+export function levelsForReach(
+  size: number,
+  firstLevel: number,
+  reachVoxels: number,
+  maxLevels: number,
+): number {
+  for (let levels = 1; levels < maxLevels; levels++) {
+    if (size * (8 << (firstLevel + levels - 1)) / 2 >= reachVoxels) return levels;
+  }
+  return maxLevels;
+}
+
 export interface Slab {
   level: number; // index into the levels, not k
   axis: number;

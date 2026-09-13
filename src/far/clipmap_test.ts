@@ -1,8 +1,12 @@
-import { Clipmap, type Slab } from "./clipmap.ts";
+import { Clipmap, levelsForReach, type Slab } from "./clipmap.ts";
 import { BrickPool } from "./pool.ts";
 
 function assert(cond: boolean, what: string): void {
   if (!cond) throw new Error(what);
+}
+
+function assertEquals(got: number, want: number, what = ""): void {
+  if (got !== want) throw new Error(`${what ? what + ": " : ""}got ${got}, want ${want}`);
 }
 
 const OPTIONS = { size: 8, levels: 3, firstLevel: 1, bricks: 4096 };
@@ -226,4 +230,17 @@ Deno.test("setLevels clamps to the allocated capacity and reports whether it mov
   assert(map.levels === OPTIONS.levels, "never over capacity");
   assert(map.setLevels(0), "zero is a change");
   assert(map.levels === 1, "never under one level");
+});
+
+Deno.test("the level count follows the reach the fog leaves", () => {
+  // 32^3 bricks from k = 1: level L reaches 32 * (8 << L) / 2 voxels, so 256, 512, 1024
+  // and so on. The fewest levels that cover the distance is what is wanted.
+  assertEquals(levelsForReach(32, 1, 256, 8), 1);
+  assertEquals(levelsForReach(32, 1, 257, 8), 2);
+  assertEquals(levelsForReach(32, 1, 15134, 8), 7, "the day sky's horizon");
+  assertEquals(levelsForReach(32, 1, 10594, 8), 7, "the night wood's");
+  // A world whose fog never closes asks for more than exist and gets the ceiling.
+  assertEquals(levelsForReach(32, 1, Infinity, 8), 8);
+  // Wider levels reach the same distance in fewer of them.
+  assertEquals(levelsForReach(64, 1, 15134, 8), 6);
 });

@@ -186,7 +186,7 @@ fn quad_vertex(w0: u32, w1: u32, k: u32, slot: u32) -> VsOut {
   if (ANIMATED) {
     // The world voxel, not the render-space one: the wind stands still while the camera
     // moves through it.
-    at += wind_offset(chunks[slot].xyz * 32 + p, block_colors[min(id, MAX_BLOCK_TYPES - 1u) * 2u + 1u].w);
+    at += wind_offset(chunks[slot].xyz * 32 + p, block_colors[min(id, MAX_BLOCK_TYPES - 1u) * 3u + 1u].w);
   }
   var out: VsOut;
   out.position = camera.view_proj * vec4f(at, 1.0);
@@ -215,12 +215,25 @@ fn fs(in: VsOut) -> @location(0) vec4f {
   let face = in.id_face & 7u;
   // Ids past the color table render as id 0, as blockColorTable() documents.
   let known = select(0u, id, id < MAX_BLOCK_TYPES);
-  let entry = block_colors[known * 2u];
-  let glow = block_colors[known * 2u + 1u];
+  let entry = block_colors[known * 3u];
+  let glow = block_colors[known * 3u + 1u];
   var base = entry.rgb;
   if (TEXTURED) {
     let layer = block_faces[known * 6u + face];
-    base = textureSampleGrad(block_textures, block_sampler, in.uv, layer, dpdx(in.uv), dpdy(in.uv)).rgb;
+    // A block with `flow` scrolls its texture down its faces instead of standing still.
+    // Water going over a drop is the case it is for: the sway in the vertex stage moves
+    // the faces themselves, which pushes a sheet of water into the blocks around it and
+    // reads as a flicker, and scrolling the texture is the same motion with none of that
+    // (gotchas.md "Animate flowing water with the texture, not the geometry"). The
+    // gradients are of the unscrolled uv, so the mip choice does not move with it.
+    var uv = in.uv;
+    let flow = block_colors[known * 3u + 2u].x;
+    if (ANIMATED && flow != 0.0) {
+      // Down the face for a side, and along it for a top or a bottom, so the top of a
+      // fall runs the same way the fall does.
+      uv.y += select(camera.time.x, -camera.time.x, (face >> 1u) == 1u) * flow;
+    }
+    base = textureSampleGrad(block_textures, block_sampler, uv, layer, dpdx(in.uv), dpdy(in.uv)).rgb;
   }
   // The face normal: axis face >> 1, pointing along +axis for even faces.
   let axis = face >> 1u;

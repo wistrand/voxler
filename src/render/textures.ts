@@ -69,6 +69,23 @@ function specks(base: Painter, seed: number, r: number, g: number, b: number, de
   };
 }
 
+// Cross-bedded sandstone: horizontal bands of slightly different tone, the record of
+// wind-blown dunes. `bands` is how many fit in one texture, so a wall of it reads as
+// strata rather than as noise.
+function bedded(r: number, g: number, b: number, seed: number, amount: number, bands: number): Painter {
+  const base = flat(r, g, b, seed, amount * 0.6, 3);
+  return (x, y, out) => {
+    base(x, y, out);
+    // The band edges wander, or every column would line up into a grid.
+    const wander = (fbm(seed + 1, x, y * 0.25, 2) - 0.5) * 2.5;
+    const t = Math.sin(((y + wander) / TEXTURE_SIZE) * bands * Math.PI * 2) * 0.5 + 0.5;
+    const shade = (t - 0.5) * amount;
+    out[0] += shade;
+    out[1] += shade * 0.85;
+    out[2] += shade * 0.7;
+  };
+}
+
 const BRICK_ROWS = 4;
 const BRICK_COLS = 2;
 
@@ -154,17 +171,34 @@ export const TEXTURES: readonly TextureDef[] = [
   { name: "brick", paint: brick },
   { name: "metal", paint: flat(0.70, 0.74, 0.80, 13, 0.07, 2) },
   { name: "leaves", paint: specks(flat(0.24, 0.45, 0.20, 15, 0.30), 45, 0.16, 0.32, 0.14, 0.25) },
+  { name: "leaves-dark", paint: specks(flat(0.15, 0.31, 0.17, 37, 0.30), 47, 0.09, 0.21, 0.11, 0.25) },
+  { name: "leaves-pale", paint: specks(flat(0.44, 0.60, 0.26, 39, 0.26), 49, 0.33, 0.48, 0.19, 0.22) },
+  // Birch: a pale trunk with the darker dashes across it, which is the whole tell. The
+  // dashes are grey rather than black: a texture tiles against itself, so the step across
+  // its own wrap is its contrast, and a near-black speck on white fails the seam test.
+  { name: "birch", paint: specks(flat(0.84, 0.84, 0.79, 51, 0.05), 53, 0.52, 0.50, 0.47, 0.16) },
   { name: "water", paint: flat(0.20, 0.40, 0.75, 17, 0.08, 2) },
+  // Broken water: pale, and mottled harder than still water so a falling sheet reads as
+  // froth rather than as a pane of glass.
+  { name: "whitewater", paint: specks(flat(0.78, 0.88, 0.96, 33, 0.16), 35, 1.0, 1.0, 1.0, 0.30) },
   { name: "glass", paint: flat(0.80, 0.90, 0.95, 19, 0.04, 2) },
   // Glowing mushroom caps, one per species (plan-living-world phases 1 and 3).
   { name: "glowcap", paint: cap(0.62, 0.85, 0.78, 21) },
   { name: "glowcap-violet", paint: cap(0.70, 0.55, 0.95, 23) },
   { name: "glowcap-amber", paint: cap(0.95, 0.78, 0.45, 25) },
   { name: "glowcap-rose", paint: cap(0.95, 0.60, 0.70, 27) },
+  { name: "jelly", paint: cap(0.55, 0.82, 0.95, 31) },
   { name: "shroomstem", paint: specks(flat(0.86, 0.83, 0.74, 29, 0.08), 51, 0.70, 0.68, 0.60, 0.15) },
   { name: "bark", paint: bark },
   { name: "fern", paint: fern },
   { name: "moss", paint: specks(flat(0.22, 0.42, 0.20, 37, 0.22), 53, 0.30, 0.52, 0.24, 0.30) },
+  // Monument Valley. The sandstone and the organ rock are cross-bedded, so both are
+  // banded along the texture's V axis, which points up a wall.
+  { name: "redsand", paint: specks(flat(0.72, 0.42, 0.28, 39, 0.12, 4), 55, 0.62, 0.34, 0.22, 0.18) },
+  { name: "organrock", paint: bedded(0.55, 0.29, 0.21, 57, 0.10, 3) },
+  { name: "sandstone", paint: bedded(0.78, 0.48, 0.31, 59, 0.13, 5) },
+  { name: "caprock", paint: specks(flat(0.56, 0.47, 0.42, 61, 0.14, 3), 63, 0.42, 0.35, 0.32, 0.30) },
+  { name: "sage", paint: specks(flat(0.40, 0.43, 0.31, 65, 0.26), 67, 0.30, 0.33, 0.24, 0.35) },
 ];
 
 export const TEXTURE_LAYERS: Readonly<Record<string, number>> = Object.fromEntries(

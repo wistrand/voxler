@@ -41,9 +41,10 @@ struct FarParams {
 }
 
 struct FarColors {
-  // Two vec4f per block, like the near field's table: color and solidity, then
-  // emission (design-formats.md "Block table").
-  color: array<vec4f, 512>,
+  // Two vec4f per block, like the near field's table: color and solidity, then emission
+  // and, in w, the block's light level 0..15 where the near field's table keeps the sway
+  // (design-formats.md "Block table").
+  color: array<vec4f, 768>,
 }
 
 @group(0) @binding(0) var<uniform> far: FarParams;
@@ -73,6 +74,10 @@ const COVERAGE_Y: i32 = 32;
 const COVERAGE_Z: i32 = 64;
 
 // True where the near field is drawing the chunk holding this voxel.
+//
+// Tested per cell, which looks like a lot of work inside a brick the near field covers
+// wholly, and is not: a brick-level test measured no faster at all
+// (gotchas.md "The covered-cell path is not hot").
 fn near_covers(voxel: vec3i) -> bool {
   let c = voxel >> vec3u(5u);
   let rel = c - far.mask_origin.xyz;
@@ -83,6 +88,19 @@ fn near_covers(voxel: vec3i) -> bool {
     (c.z & (COVERAGE_Z - 1)) * COVERAGE_X * COVERAGE_Y);
   return (coverage[i >> 5u] & (1u << (i & 31u))) != 0u;
 }
+
+// Every clipmap level ends on a circle centred on the camera, because its window is a
+// camera-centred box, and the change in cell size across that circle can be seen.
+//
+// Spreading the switch over a band, so each ray gives up its finest level a little sooner
+// than its neighbour, was tried and taken out again. It trades one artefact for a worse
+// one: the two levels do not hold the same world, and inside the band each ray answers
+// from a different one, so the geometry of the level a ray did *not* pick shows through
+// the gaps in the geometry of the one it did. Standing still that is a ragged edge;
+// moving, the band sweeps across the frame and the far field boils
+// (gotchas.md "Dithering a level boundary shows both levels at once"). What would work is
+// blending the two, which means marching both, and that is the cost the beam pre-pass and
+// the level walk exist to avoid.
 
 // Debug views (`?far=steps` and `?far=bricks`).
 const DEBUG_NONE: u32 = 0u;
@@ -116,16 +134,72 @@ fn cell_block(brick: u32, cell: vec3i) -> u32 {
   return (word >> ((i & 3u) * 8u)) & 0xffu;
 }
 
+// The light level of the block in one cell of a level, 0 where there is nothing there.
+// Takes a cell in the level's own grid and finds the brick itself, so a lookup may cross
+// into the brick next door.
+fn cell_light(level: u32, cell: vec3i) -> f32 {
+  let b = cell >> vec3u(3u); // BRICK_CELLS is 8
+  let entry = brick_entry(level, b);
+  if (entry == 0u) {
+    return 0.0;
+  }
+  var id = entry & 0xffu;
+  if ((entry & ENTRY_SOLID) == 0u) {
+    let local = cell - b * BRICK_CELLS;
+    let brick = entry - 1u;
+    if (!cell_solid(brick, local)) {
+      return 0.0;
+    }
+    id = cell_block(brick, local);
+  }
+  return block_colors.color[min(id, 255u) * 3u + 1u].w;
+}
+
+// What the glowing blocks around a hit put on it, as a block-light level for
+// `block_light()` in shading.wgsl. The near field bakes this per quad corner in the mesh
+// job; the far field has no mesh, so it asks the cells around the hit at shading time.
+//
+// Three ways it is not the near field's answer, all of them deliberate. It reads the
+// twenty-six cells touching the hit and no further, so its reach is one cell rather than
+// LIGHT_MAX voxels: at the fine levels that is a few voxels of pool instead of fifteen,
+// and at the coarse ones a cell is wider than the light travels and the fall-off below
+// takes it to zero on its own, which is the right answer there. It does not flood, so
+// light passes through a wall a voxel thick. And it costs nothing until a ray hits
+// something, because it runs at the hit and not per step.
+fn gathered_light(level: u32, cell: vec3i, cell_voxels: f32) -> f32 {
+  var best = 0.0;
+  for (var dz = -1; dz <= 1; dz++) {
+    for (var dy = -1; dy <= 1; dy++) {
+      for (var dx = -1; dx <= 1; dx++) {
+        if (dx == 0 && dy == 0 && dz == 0) {
+          continue;
+        }
+        let level_at = cell_light(level, cell + vec3i(dx, dy, dz));
+        if (level_at <= 0.0) {
+          continue;
+        }
+        // Distance in voxels, not in cells: the same emitter reads as a bright neighbour
+        // at two-voxel cells and as nothing at all at thirty-two.
+        let steps = f32(abs(dx) + abs(dy) + abs(dz));
+        best = max(best, level_at - sqrt(steps) * cell_voxels);
+      }
+    }
+  }
+  return max(best, 0.0);
+}
+
 struct Hit {
   hit: bool,
-  // The first surface on this ray is one the near field is drawing, so the far field
-  // has nothing to say about the pixel and stops. Marching past it would put the ray
-  // inside solid ground and surface it again at the edge of the meshed region, which
-  // is a line of side faces along that whole edge.
+  // Set where the ray met a cell the near field is drawing and carried on past it
+  // rather than hitting it. Kept so a caller can tell "found nothing" from "found only
+  // what the raster pass owns".
   stopped: bool,
   block: u32,
   axis: u32,
   level: u32,
+  // The cell the ray stopped in, in that level's own grid. Shading asks the cells around
+  // it what is glowing (`gathered_light`).
+  cell: vec3i,
   t: f32, // distance along the ray, in voxels
   steps: u32,
   bricks: u32,
@@ -167,15 +241,25 @@ fn march_brick(
   var t_cell = t0;
   for (var i = 0u; i < far.grid.z; i++) {
     (*out).steps++;
-    if (cell_solid(brick, cell)) {
-      let voxel = (base * BRICK_CELLS + cell) * cell_voxels + world_base;
-      if (near_covers(voxel)) {
-        (*out).stopped = true;
-        return true;
-      }
+    // A cell the near field is drawing is marched *past*, not hit and not stopped on.
+    //
+    // Stopping was the first rule, and it leaves a hole. By the time this runs the depth
+    // test at the top of the pass has already found this pixel empty, so the near field
+    // has no geometry anywhere along this ray: whatever is behind the covered chunk is
+    // what the viewer should see. Along the silhouette of a meshed butte the ray grazes
+    // a covered chunk the raster pass did not fill, and stopping there painted sky over
+    // the rock behind it, a staircase of sky-coloured steps down the edge
+    // (gotchas.md "The near field's coverage is a chunk, not a pixel").
+    let covered = cell_solid(brick, cell) &&
+      near_covers((base * BRICK_CELLS + cell) * cell_voxels + world_base);
+    if (covered) {
+      (*out).stopped = true;
+    }
+    if (cell_solid(brick, cell) && !covered) {
       (*out).hit = true;
       (*out).block = cell_block(brick, cell);
       (*out).axis = axis;
+      (*out).cell = base * BRICK_CELLS + cell;
       (*out).t = t_cell;
       return true;
     }
@@ -213,6 +297,7 @@ fn march_level(level: u32, dir: vec3f, t_voxels: f32, out: ptr<function, Hit>) -
   let world_base = far.camera_chunk.xyz * 32 - far.level[level].offset.xyz;
   let inv = 1.0 / max(abs(dir), vec3f(1e-8)) * sign(dir + vec3f(1e-20));
   let step = vec3i(sign(dir));
+  let b_hi = i32(far.grid.x);
   var t_enter = t_voxels / cell_voxels;
   let entry_point = p0 + dir * (t_enter + 1e-4);
   if (any(entry_point < vec3f(0.0)) || any(entry_point >= vec3f(extent))) {
@@ -222,7 +307,6 @@ fn march_level(level: u32, dir: vec3f, t_voxels: f32, out: ptr<function, Hit>) -
   let next = vec3f((brick + max(step, vec3i(0))) * BRICK_CELLS);
   var t = (next - p0) * inv;
   let dt = abs(inv) * f32(BRICK_CELLS);
-  let size = i32(far.grid.x);
   // The face the ray crossed to enter the current brick, for shading a brick that is
   // solid throughout: there is no cell walk to report one.
   var face = 1u;
@@ -235,19 +319,18 @@ fn march_level(level: u32, dir: vec3f, t_voxels: f32, out: ptr<function, Hit>) -
       // a cell of the pool is tested the same way.
       let voxel = vec3i(floor(p0 + dir * (t_enter + 1e-4)) * cell_voxels) + world_base;
       if (near_covers(voxel)) {
+        // Marched past, as in march_brick: step to the next brick instead of hitting.
         (*out).stopped = true;
+      } else {
+        (*out).hit = true;
+        (*out).block = entry & 0xffu;
+        (*out).axis = face;
+        (*out).level = level;
+        (*out).cell = vec3i(floor(p0 + dir * (t_enter + 1e-4)));
+        (*out).t = t_enter * cell_voxels;
         return t_enter * cell_voxels;
       }
-      (*out).hit = true;
-      (*out).block = entry & 0xffu;
-      (*out).axis = face;
-      (*out).level = level;
-      (*out).t = t_enter * cell_voxels;
-      return t_enter * cell_voxels;
     } else if (entry != 0u && march_brick(entry - 1u, brick, p0, dir, inv, t_enter, world_base, i32(cell_voxels), face, out)) {
-      if ((*out).stopped) {
-        return t_enter * cell_voxels;
-      }
       (*out).level = level;
       (*out).t = (*out).t * cell_voxels; // cell units to voxels
       return (*out).t;
@@ -268,7 +351,7 @@ fn march_level(level: u32, dir: vec3f, t_voxels: f32, out: ptr<function, Hit>) -
       brick.z += step.z;
       face = 2u;
     }
-    if (any(brick < vec3i(0)) || any(brick >= vec3i(size))) {
+    if (any(brick < vec3i(0)) || any(brick >= vec3i(b_hi))) {
       return t_enter * cell_voxels; // left the window: the next level carries on
     }
   }
@@ -353,11 +436,11 @@ fn beam_far(@builtin(global_invocation_id) gid: vec3u) {
 }
 
 fn march(dir: vec3f, start: f32) -> Hit {
-  var out = Hit(false, false, 0u, 0u, 0u, 0.0, 0u, 0u);
+  var out = Hit(false, false, 0u, 0u, 0u, vec3i(0), 0.0, 0u, 0u);
   var t = start;
   for (var level = 0u; level < far.counts.x; level++) {
     let t_exit = march_level(level, dir, t, &out);
-    if (out.hit || out.stopped) {
+    if (out.hit) {
       return out;
     }
     t = max(t_exit, t);
@@ -423,9 +506,17 @@ fn march_far(@builtin(global_invocation_id) gid: vec3u) {
     var n = vec3f(0.0);
     n[result.axis] = -sign(dir[result.axis]);
     let known = min(result.block, 255u);
-    let albedo = block_colors.color[known * 2u].rgb;
-    let glow = block_colors.color[known * 2u + 1u].rgb;
-    color = vec4f(apply_fog(albedo * surface_light(n) + glow * albedo, dir, result.t), 1.0);
+    let albedo = block_colors.color[known * 3u].rgb;
+    let glow = block_colors.color[known * 3u + 1u].rgb;
+    // Same three terms as the near field's fragment shader, in the same order and over
+    // the same functions: sky light, block light, the block's own emission
+    // (CLAUDE.md "Conventions"). What differs is where the block-light level comes from,
+    // because the far field has no baked one to read.
+    var lit = albedo * surface_light(n);
+    let cell_voxels = f32(far.level[result.level].info.x);
+    lit += albedo * block_light(gathered_light(result.level, result.cell, cell_voxels));
+    lit += glow * albedo;
+    color = vec4f(apply_fog(lit, dir, result.t), 1.0);
   }
   textureStore(out_color, vec2i(gid.xy), color);
 }
