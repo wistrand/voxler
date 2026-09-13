@@ -55,6 +55,12 @@ async function options(dev: boolean): Promise<esbuild.BuildOptions> {
     target: "es2022",
     loader: { ".html": "copy" },
     plugins: [wgslText],
+    // Saving a benchmark result POSTs to the dev server, and only `serve.ts --dev`
+    // answers that route. A build that is not the dev build is a build nobody can save
+    // from, so the save is compiled out rather than left to fail: the released bundle
+    // contains no POST at all (src/bench/save.ts). Checked by grepping dist/main.js for
+    // the route.
+    define: { __BENCH_SAVE__: dev ? "true" : "false" },
     sourcemap: dev ? "linked" : false,
     minify: !dev,
     logLevel: "info",

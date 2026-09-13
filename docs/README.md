@@ -25,6 +25,17 @@ Two things to know before changing either half:
   is today; `BASE=voxler deno task docs` serves under the subpath if you want to prove it,
   since an absolute path works at the root and only breaks once deployed.
 
+`?bench=` works on the deployed site, and its numbers are worth nothing. The run itself is
+fine: the scene drives, the overlay reports it. Saving does not happen at all. Only
+`serve.ts --dev` answers the save route, so a published page could never do anything but
+fail against whatever host it was loaded from, and rather than leave that to fail it is
+compiled out: `build.ts` defines `__BENCH_SAVE__` false for a release build and the
+`fetch` in `src/bench/save.ts` goes with it, route string included. The published bundle
+contains no POST. The overlay says `not saved` and the result stays in the console.
+More to the point, the site is not cross-origin isolated, so the workers are on the copy
+path and the numbers are not comparable to anything in the repo, on top of being from a
+stranger's hardware. Nothing published here should ever be quoted as a measurement.
+
 Screenshots are taken from the running engine at the viewport size in `.mcp.json`, with
 the on-screen panel hidden (`document.getElementById("hud").style.display = "none"`).
 Keep them under a few hundred KB each; they are in git forever.

@@ -141,7 +141,7 @@ today `src/gpu/`, `src/render/`, `src/camera/`, `src/util/`, `src/debug/`,
 | `src/workers/`   | `WorkerPool`, job queue, buffer pool, the worker, job handlers |
 | `src/util/`      | math, ring buffers, timers                                     |
 | `src/debug/`     | the debug overlay (caps, stats, camera, errors), the on-screen panel (frame rate, switches, compile progress) and frame `Stats` |
-| `src/bench/`     | benchmark scenes, runner, session                              |
+| `src/bench/`     | benchmark scenes, runner, session; tracked, and `/bench/` in `.gitignore` is anchored so it stays that way ([gotchas.md](agent_docs/gotchas.md) "A gitignore pattern without a leading slash") |
 | `bench/results/` | dated benchmark result files (generated, gitignored, local to a machine) |
 | `index.html`     | page shell, copied to `dist/` by the build                     |
 | `build.ts`       | esbuild bundling (`buildRelease()`, `watch()`)                 |
@@ -292,6 +292,12 @@ ground after changing a world's terrain: a stale one runs the whole scene underg
 and every number it produces is for an empty frame
 ([gotchas.md](agent_docs/gotchas.md)). `stream.holes` in each result counts chunks
 near the camera that should be resident but weren't (0 means streaming kept up).
+A `?bench=` run works anywhere the page loads, including the published site; saving it is
+the dev build's alone. `build.ts` defines `__BENCH_SAVE__` false for a release build, so
+the POST in `src/bench/save.ts` is compiled out and the published bundle carries no
+request to post back with: the overlay says `not saved` and the JSON stays in the console.
+A run off the published site is not comparable to anything here anyway, because that page
+cannot be cross-origin isolated and its workers are on the copy path.
 
 ## Docs
 

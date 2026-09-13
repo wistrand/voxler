@@ -3,4 +3,4 @@ dist/
 .claude/
 node_modules/
 .mcp.json
-bench/
+/bench/

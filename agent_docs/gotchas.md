@@ -1051,3 +1051,32 @@ the dev machine, from 2052 to 6705 and from 52 to 31.
 
 **A gate tuned on one machine is tuned to that machine's timings.** This one only showed up
 because the same build ran somewhere else.
+
+### A gitignore pattern without a leading slash matches at every depth
+
+`bench/` in `.gitignore` was meant for the benchmark results at the repo root. A pattern
+with no leading slash matches at any depth, so it also swallowed `src/bench/`: the scene
+table, the runner, the session and the voxelizer bench, all of them imported by
+`src/main.ts` and none of them ever committed.
+
+Nothing local notices. `deno task check`, `test` and `build` all read the working tree,
+where the files are sitting right there. The first thing that sees the repo as a repo is
+CI, which checks out and fails on three `TS2307 Cannot find module` errors for files you
+can open in your editor.
+
+`/bench/` is the fix: anchored, so it means the one at the root and nothing else.
+
+**Two habits worth keeping:**
+
+- After touching `.gitignore`, ask what else the pattern caught:
+  `git ls-files --others --ignored --exclude-standard -- src/` lists source files that can
+  never reach CI. It should be empty.
+- To check a build against what git actually has rather than what is on disk, copy the
+  index into a scratch directory and run the tasks there:
+
+  ```
+  git ls-files -z | xargs -0 -I{} sh -c 'mkdir -p "$2/$(dirname "$1")" && cp "$1" "$2/$1"' _ {} /tmp/stage
+  cd /tmp/stage && deno task check && deno task test && deno task build
+  ```
+
+  That is the same view the runner gets, and it takes a minute instead of a push.
