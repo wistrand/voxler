@@ -10,6 +10,7 @@
 
 import { allocShared } from "../workers/buffers.ts";
 import { ChunkData, type ChunkParts } from "./chunk.ts";
+import { BLOCK_OPAQUE } from "./blocks.ts";
 
 const HEADER_BYTES = 16; // u32 bits, u32 palette length, u32 word count, u32 reserved
 const MIN_CLASS_LOG = 8; // 256 B
@@ -113,6 +114,48 @@ export class PayloadArena {
   // voxels: the follow flyover reads a few thousand a frame, and at five objects each
   // that is the GC in the frame path (CLAUDE.md "Never allocate in the per-frame path").
   // `index` is a `voxelIndex()`. Decodes the same layout as `ChunkData.get()`.
+  // Whether every block in a stored chunk's palette is opaque, allocating nothing. A
+  // chunk with no palette entry that is air, water or glass has no face anywhere inside
+  // it, so whether it needs meshing at all comes down to its six neighbours' touching
+  // faces, and MeshScheduler asks this before it decodes those (`cannotHaveFaces`).
+  // The palette is a handful of entries for strata and at most 256, so this is cheaper
+  // than one message to a worker, let alone the job it stands in for.
+  allOpaque(offset: number): boolean {
+    const w = offset >>> 2;
+    const palette = (offset + HEADER_BYTES) >>> 1; // in u16s
+    const length = this.u32[w] === 0 ? 1 : this.u32[w + 1];
+    for (let i = 0; i < length; i++) {
+      if (BLOCK_OPAQUE[this.u16[palette + i]] === 0) return false;
+    }
+    return true;
+  }
+
+  // Whether every voxel on one face of a stored chunk is opaque: `axis` 0, 1 or 2 and
+  // `at` the coordinate along it, 0 or 31. This is the plane the mesher builds from a
+  // neighbour (`setPlane`), read here so a chunk with nothing but opaque blocks in it
+  // can be told apart from one that needs a job without starting the job: 1024 voxels
+  // through the same decode as `blockAt`, with the header read once.
+  faceAllOpaque(offset: number, axis: number, at: number): boolean {
+    const w = offset >>> 2;
+    const bits = this.u32[w];
+    const palette = (offset + HEADER_BYTES) >>> 1;
+    if (bits === 0) return BLOCK_OPAQUE[this.u16[palette]] === 1;
+    const words = (offset + HEADER_BYTES + pad4(this.u32[w + 1] * 2)) >>> 2;
+    const perWordLog = 5 - LOG2[bits];
+    const perWordMask = (1 << perWordLog) - 1;
+    const indexMask = (1 << bits) - 1;
+    // voxelIndex is x | z << 5 | y << 10 (coords.ts); the face is the 32 x 32 of the
+    // other two.
+    for (let u = 0; u < 32; u++) {
+      for (let v = 0; v < 32; v++) {
+        const index = axis === 0 ? at | (u << 5) | (v << 10) : axis === 1 ? u | (v << 5) | (at << 10) : u | (at << 5) | (v << 10);
+        const id = this.u16[palette + ((this.u32[words + (index >>> perWordLog)] >>> ((index & perWordMask) * bits)) & indexMask)];
+        if (BLOCK_OPAQUE[id] === 0) return false;
+      }
+    }
+    return true;
+  }
+
   blockAt(offset: number, index: number): number {
     const w = offset >>> 2;
     const bits = this.u32[w];

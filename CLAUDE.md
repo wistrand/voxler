@@ -469,7 +469,7 @@ species, falls and a different scatter and its spawn moved to 188
 | Main-thread CPU per frame                  | under 2 ms, flat in resident chunks     | p50 0.34-1.69; p99 0.70-5.26, over in scenes that stream hard |
 | Near-field meshed radius                   | 16 chunks (512 voxels) horizontally     | as configured (`?streamRadius`)                 |
 | Far-field view distance                    | as far as the fog, no further           | levels are trimmed to the sky's fog reach per world (`levelsForReach`), so a world sets `far` and gets the levels it can see; 21.7 MiB of bricks in terrain, 7.0 in the forest |
-| Mesh throughput, surface chunk             | under 0.5 ms per chunk per worker       | 60-150 us without block light (plan-meshing phase 7) |
+| Mesh throughput, surface chunk             | under 0.5 ms per chunk per worker       | 60-150 us without block light (plan-meshing phase 7); 0.45 ms measured in the workers over the terrain flight with AO and light. A job runs only for a chunk that can have faces: the scheduler reads a neighbour's touching face itself, which took the forest from 625 mesh jobs to 419 over the same 15 s flight, 206 of them face-less before and none after, and the flyover from 17,860 to 16,980 ([gotchas.md](agent_docs/gotchas.md) "A third of the mesh jobs were for the chunk under the surface") |
 | Mesh memory                                | 8 bytes per quad plus cluster padding   | 10.4% padding over the flyover                  |
 | Streaming                                  | no visible holes at sprint flight speed | `stream.holes` 0 in all five scenes             |
 

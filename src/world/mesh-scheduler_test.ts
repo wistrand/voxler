@@ -148,6 +148,53 @@ Deno.test("uniform chunks that can't have faces get an empty mesh without a job"
   }
 });
 
+Deno.test("a chunk of opaque strata behind opaque neighbours gets an empty mesh without a job", () => {
+  // Stone with dirt on top: two blocks, so not uniform, but nothing in it can have a
+  // face. Underground that is most chunks, and every one of them was a full mesh job
+  // for no quads until the palette scan (`cannotHaveFaces`).
+  const ids = new Uint16Array(32 * 32 * 32);
+  ids.fill(1); // stone
+  ids.fill(2, 16 * 32 * 32); // dirt from y = 16 up (voxelIndex puts y in the high bits)
+  const STRATA = ChunkData.fromDense(ids);
+  assert(!STRATA.isUniform, "the strata chunk came out uniform; the test is not testing anything");
+  const HILLS = dense("hills"); // air in it, so a face against anything opaque
+  // A surface chunk: solid for its bottom eight layers, air above. Under it a chunk of
+  // stone has no face, because the face they share is solid all over; above it one
+  // does, because the face they share is air.
+  const surf = new Uint16Array(32 * 32 * 32);
+  surf.fill(1, 0, 8 * 32 * 32);
+  const SURFACE = ChunkData.fromDense(surf);
+  const cases: [ChunkData, ChunkData[], boolean, string][] = [
+    [STONE, [STONE, STONE, SURFACE, STONE, STONE, STONE], false, "stone under a surface chunk (+y neighbour's bottom is solid)"],
+    [STONE, [STONE, STONE, STONE, SURFACE, STONE, STONE], true, "stone over a surface chunk (-y neighbour's top is air)"],
+    [STRATA, [STONE, STONE, SURFACE, STONE, STONE, STONE], false, "strata under a surface chunk"],
+    [STRATA, Array(6).fill(STONE), false, "strata in stone"],
+    [STRATA, Array(6).fill(STRATA), false, "strata in strata"],
+    [STRATA, [...Array(5).fill(STONE), AIR], true, "strata with air above"],
+    [STRATA, [...Array(5).fill(STONE), HILLS], true, "strata with hills beside"],
+    [STRATA, [...Array(5).fill(STONE), ChunkData.uniform(WATER)], true, "strata with water beside"],
+    [STONE, Array(6).fill(STRATA), false, "stone in strata"],
+    [HILLS, Array(6).fill(STONE), true, "hills in stone"],
+  ];
+  for (const [center, around, job, what] of cases) {
+    const { pool, sched, put } = setup();
+    put(0, 0, 0, center);
+    around.forEach((c, f) => put(...OFFSETS[f], c));
+    sched.update(0, 0, 0);
+    const submitted = pool.jobs.some((j) => j.key === CENTER);
+    assert(submitted === job, `${what}: job ${submitted}, expected ${job}`);
+    if (!job) assert(sched.meshedVersionOf(CENTER) === sched.versionOf(CENTER), `${what}: empty mesh accepted`);
+    // The cheap answer has to be the mesher's answer: mesh the same chunk against the
+    // same neighbours and check that it really has no faces.
+    if (!job) {
+      const planes = newPlanes();
+      around.forEach((c, f) => setPlane(planes, f, c));
+      const mesh = new BinaryMesher().mesh(center, planes);
+      assert(mesh.count === 0, `${what}: the mesher found ${mesh.count} quads where the scheduler saw none`);
+    }
+  }
+});
+
 Deno.test("job output equals meshing the same chunk directly, shared and copy paths", () => {
   const center = dense("hills with water");
   const around = [dense("water and glass"), STONE, AIR, dense("hills"), ChunkData.uniform(WATER), AIR];

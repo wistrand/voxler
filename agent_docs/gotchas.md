@@ -271,6 +271,21 @@ disproved, drop the marker or correct the entry. Append new traps as they are hi
   every level boundary, clearest over flat water. Start the walk from the face the ray
   actually crossed. Read the pixels along a column and compare against a debug view
   that colors by level rather than guessing from a screenshot.
+- **A third of the mesh jobs were for the chunk under the surface, and found nothing.**
+  `cannotHaveFaces` skipped a job only for a uniform chunk whose six neighbours were
+  uniform too. The chunk straight under a surface chunk is uniform stone, but the chunk
+  above it holds stone, snow, air and moss, so the rule gave up and a full job ran:
+  27 chunks decoded, the AO shell built, the columns scanned, and no faces, because the
+  face the two share is solid all over. In the forest that was 206 of 625 mesh jobs
+  over a 15 s flight, 33%, at about 0.45 ms of worker time each plus the two messages.
+  Now the scheduler reads the neighbour's touching face itself (`faceAllOpaque` in
+  src/world/arena.ts, the same 1024 voxels `setPlane` would decode first thing in the
+  worker) and answers on the main thread: the same flight after, 419 jobs, 419 with
+  faces, 0 without. Two things to know from finding it. `mesh.meshes` is a gauge of
+  meshes held, not a count of jobs that produced one, and reading it as a count said
+  87% of jobs were empty, which was wrong; count what you are claiming. And a CPU
+  profile of the workers under DevTools tracing put a mesh job at 7 ms; the workers'
+  own timing (`pool.busyMs`) put it at 0.45 ms. The profiler was the cost.
 - **A slab that comes back after the window moved lands on the wrong bricks.** The
   clipmap's windows are camera-centred and addressed toroidally, so a brick's grid cell
   never moves, but *which* brick sits at `u, v` of a slab moves every time the window

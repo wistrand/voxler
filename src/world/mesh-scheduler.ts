@@ -23,7 +23,7 @@
 import { CLUSTER_QUADS, ORDER_EMISSION } from "../mesh/cluster.ts";
 import { type MeshJobInput, type MeshJobOutput, REF_ALL, REF_BLOCK, REF_FACES, REF_MISSING } from "../mesh/job.ts";
 import { ALL_NEIGHBORS, FACE_NEIGHBORS, NEIGHBOR_OFFSETS } from "../mesh/neighbors.ts";
-import { FACE_COUNT } from "../mesh/quad.ts";
+import { FACE_AXIS, FACE_COUNT, FACE_SIGN } from "../mesh/quad.ts";
 import { SETTLED_FAILED } from "../workers/pool.ts";
 import { BLOCK_OPAQUE, BLOCK_TRANSLUCENT } from "./blocks.ts";
 import { ChunkTable } from "./chunk-table.ts";
@@ -365,18 +365,44 @@ export class MeshScheduler {
     return true;
   }
 
-  // True for uniform chunks whose every face is hidden (or that have none).
+  // True for chunks whose every face is hidden, or that have none: air, and any chunk
+  // of nothing but opaque blocks (uniform stone, or strata of stone and dirt) whose six
+  // neighbours are opaque on the face that touches it.
+  //
+  // The touching face is what matters, not the neighbour as a whole. The chunk this
+  // catches is the one straight under a surface chunk: uniform stone, with a neighbour
+  // above it of stone, snow, air and moss. That neighbour is not uniform and not all
+  // opaque, but its bottom face is solid, and the old rule gave up as soon as a
+  // neighbour was not uniform. In the forest a third of all mesh jobs, 206 of 625 over
+  // a 15 s flight, were these, each decoding 27 chunks and building the AO shell to
+  // come back with no faces. Reading the 1024 voxels of a face here is the same plane
+  // the worker would build first thing (`setPlane`), and cheaper than the message that
+  // would have asked it to.
   private cannotHaveFaces(key: number): boolean {
     const store = this.store;
-    const id = store.slotUniformId(store.slotOf(key));
-    if (id < 0) return false;
-    const opaque = BLOCK_OPAQUE[id] === 1;
-    if (!opaque && BLOCK_TRANSLUCENT[id] === 0) return true; // air
+    const slot = store.slotOf(key);
+    const id = store.slotUniformId(slot);
+    let opaque: boolean;
+    if (id >= 0) {
+      opaque = BLOCK_OPAQUE[id] === 1;
+      if (!opaque && BLOCK_TRANSLUCENT[id] === 0) return true; // air
+    } else {
+      if (!store.slotAllOpaque(slot)) return false;
+      opaque = true;
+    }
     for (let f = 0; f < FACE_COUNT; f++) {
-      const slot = store.slotOf(neighborKey(key, f));
-      if (slot === -1) return false; // outside the world reads as air
-      const n = store.slotUniformId(slot);
-      if (n < 0) return false;
+      const ns = store.slotOf(neighborKey(key, f));
+      if (ns === -1) return false; // outside the world reads as air
+      const n = store.slotUniformId(ns);
+      if (n < 0) {
+        // Only its touching face matters. A neighbour on the +axis side touches with
+        // its own 0 face, one on the -axis side with its 31 face. The palette scan
+        // first, because most of the time it settles it without touching a voxel.
+        if (!opaque) return false;
+        if (store.slotAllOpaque(ns)) continue;
+        if (store.slotFaceAllOpaque(ns, FACE_AXIS[f], FACE_SIGN[f] > 0 ? 0 : 31)) continue;
+        return false;
+      }
       if (BLOCK_OPAQUE[n] || (!opaque && n === id)) continue;
       return false;
     }

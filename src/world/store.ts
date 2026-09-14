@@ -15,6 +15,7 @@
 // only return to the arena through reclaim(safeStamp), once every job that might
 // read them has ended (MeshScheduler owns the stamps).
 
+import { BLOCK_OPAQUE } from "./blocks.ts";
 import { blockBytes, PayloadArena } from "./arena.ts";
 import { ChunkData } from "./chunk.ts";
 import { ChunkTable } from "./chunk-table.ts";
@@ -167,6 +168,23 @@ export class ChunkStore {
 
   slotBlockOffset(slot: number): number {
     return this.slotOffset[slot];
+  }
+
+  // True when nothing in the chunk at `slot` can have a face inside it: a uniform
+  // opaque block, or an arena chunk whose whole palette is opaque (`PayloadArena.allOpaque`).
+  slotAllOpaque(slot: number): boolean {
+    const uniform = this.slotUniform[slot];
+    if (uniform >= 0) return BLOCK_OPAQUE[uniform] === 1;
+    return this.arena.allOpaque(this.slotOffset[slot]);
+  }
+
+  // True when the face of the chunk at `slot` on `axis` at coordinate `at` (0 or 31)
+  // is opaque all over, so a chunk against it has no face there
+  // (`PayloadArena.faceAllOpaque`).
+  slotFaceAllOpaque(slot: number, axis: number, at: number): boolean {
+    const uniform = this.slotUniform[slot];
+    if (uniform >= 0) return BLOCK_OPAQUE[uniform] === 1;
+    return this.arena.faceAllOpaque(this.slotOffset[slot], axis, at);
   }
 
   slotBlockBytes(slot: number): number {

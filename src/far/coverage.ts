@@ -25,6 +25,7 @@ export const COVERAGE_Y = 32;
 export const COVERAGE_Z = 64;
 export const COVERAGE_CELLS = COVERAGE_X * COVERAGE_Y * COVERAGE_Z;
 export const COVERAGE_WORDS = COVERAGE_CELLS / 32;
+const SIZES = new Int32Array([COVERAGE_X, COVERAGE_Y, COVERAGE_Z]);
 
 export class CoverageMask {
   readonly words = new Uint32Array(COVERAGE_WORDS);
@@ -36,6 +37,8 @@ export class CoverageMask {
   covered = 0; // bits set
 
   private centred = false;
+  private readonly want = new Int32Array(3);
+  private readonly cell = new Int32Array(3);
 
   // Toroidal cell of a chunk coordinate.
   index(cx: number, cy: number, cz: number): number {
@@ -77,8 +80,12 @@ export class CoverageMask {
   // chunk a window away, and eviction would clear it eventually, but "eventually" is
   // long enough to show terrain from somewhere else.
   center(cx: number, cy: number, cz: number): void {
-    const want = [cx - COVERAGE_X / 2, cy - COVERAGE_Y / 2, cz - COVERAGE_Z / 2];
-    const size = [COVERAGE_X, COVERAGE_Y, COVERAGE_Z];
+    // Scratch, not literals: this runs every frame, and three array literals a frame
+    // is the GC in the frame path (CLAUDE.md "Never allocate in the per-frame path").
+    const want = this.want, size = SIZES;
+    want[0] = cx - COVERAGE_X / 2;
+    want[1] = cy - COVERAGE_Y / 2;
+    want[2] = cz - COVERAGE_Z / 2;
     let jumped = !this.centred;
     for (let a = 0; a < 3; a++) if (Math.abs(want[a] - this.origin[a]) >= size[a]) jumped = true;
     if (jumped) {
@@ -117,9 +124,9 @@ export class CoverageMask {
 
   private clearPlane(axis: number, plane: number): void {
     const o = this.origin;
-    const sizes = [COVERAGE_X, COVERAGE_Y, COVERAGE_Z];
+    const sizes = SIZES;
     const a = (axis + 1) % 3, b = (axis + 2) % 3;
-    const c = [0, 0, 0];
+    const c = this.cell;
     c[axis] = plane;
     for (let v = 0; v < sizes[b]; v++) {
       c[b] = o[b] + v;
