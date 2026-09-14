@@ -1,4 +1,4 @@
-import { stepSpeed, wheelDolly } from "./controls.ts";
+import { pinchDolly, stepScale, stepSpeed, stickAxis, wheelDolly } from "./controls.ts";
 import { FlyCamera } from "./camera.ts";
 
 function assert(cond: boolean, what: string): void {
@@ -66,4 +66,53 @@ Deno.test("the wheel step is a distance, and aiming it does not change how far i
   for (let a = 0; a < 3; a++) {
     assert(Math.abs(dir[a] - cam.basis[6 + a]) < 1e-12, `the centre ray is not the view, axis ${a}`);
   }
+});
+
+Deno.test("spreading two fingers flies towards what is between them, closing them backs off", () => {
+  const speed = 20;
+  const towards = pinchDolly(speed, 100, 190);
+  const away = pinchDolly(speed, 190, 100);
+  assert(towards > 0, `spreading flew ${towards}`);
+  assert(away === -towards, `closing flew ${away} against ${-towards}`);
+  // The same gesture at twice the speed goes twice as far, like a wheel notch.
+  assert(pinchDolly(2 * speed, 100, 190) === 2 * towards, "the pinch does not scale with the speed");
+  assert(pinchDolly(speed, 100, 100) === 0, "fingers that did not move flew somewhere");
+  assert(pinchDolly(speed, 0, 100) === 0, "a pinch from nowhere flew somewhere");
+});
+
+Deno.test("one fling of a pinch cannot cross the world", () => {
+  const speed = 20;
+  const huge = pinchDolly(speed, 10, 100000);
+  const four = pinchDolly(speed, 100, 100 + 4 * 90);
+  assert(huge === four, `a fling flew ${huge} against the cap of ${four}`);
+});
+
+Deno.test("the two-finger stick has a dead zone and reaches full speed, both ways", () => {
+  assert(stickAxis(0) === 0, "a stick at rest moves");
+  assert(stickAxis(10) === 0, "a stick inside the dead zone moves");
+  assert(stickAxis(-10) === 0, "a stick inside the dead zone moves backwards");
+  const small = stickAxis(50);
+  assert(small > 0 && small < 1, `a small push gave ${small}`);
+  assert(stickAxis(-50) === -small, "the stick is not symmetric");
+  assert(stickAxis(1000) === 1, "a full push is not full speed");
+  assert(stickAxis(NaN) === 0, "a broken offset moved the camera");
+});
+
+Deno.test("the stick is analog, and the keys still normalise", () => {
+  const speed = 20;
+  // `stepScale` is the scale the move vector is multiplied by, so what is travelled in a
+  // second is the vector's length times it.
+  const travelled = (f: number, r: number, u: number, sprinting = false) =>
+    Math.sqrt(f * f + r * r + u * u) * stepScale(speed, sprinting, 1, f, r, u);
+  // A key is a direction: one key and two together both travel the base speed.
+  assert(Math.abs(travelled(1, 0, 0) - speed) < 1e-9, `one key flew ${travelled(1, 0, 0)}`);
+  assert(Math.abs(travelled(1, 1, 0) - speed) < 1e-9, `two keys flew ${travelled(1, 1, 0)}`);
+  // A stick is a deflection: half of one is half the speed, not all of it.
+  assert(Math.abs(travelled(0.5, 0, 0) - speed / 2) < 1e-9, `half a deflection flew ${travelled(0.5, 0, 0)}`);
+  assert(Math.abs(travelled(0.25, 0, 0) - speed / 4) < 1e-9, "a quarter deflection is not a quarter");
+  // A stick pushed to the corner is still one speed, like two keys.
+  assert(Math.abs(travelled(1, 1, 0) - speed) < 1e-9, "a corner deflection outruns the speed");
+  assert(stepScale(speed, false, 1, 0, 0, 0) === 0, "a stick at rest flew somewhere");
+  assert(stepScale(speed, false, 0, 1, 0, 0) === 0, "a frame of no time flew somewhere");
+  assert(Math.abs(travelled(1, 0, 0, true) - 10 * speed) < 1e-9, "sprint is not ten times");
 });

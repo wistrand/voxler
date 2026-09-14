@@ -6,6 +6,14 @@
 // speed; aiming with the cursor rather than the view means a thing can be approached
 // without turning to face it first. Events only record state; update() applies it once
 // per frame.
+//
+// Touch has no keys and no wheel, so two fingers carry both: where they have moved from
+// where they landed is a stick that flies while it is held (up the screen is forward,
+// across is a strafe), and spreading or closing them is the wheel, flying towards or away
+// from whatever is between them. A stick rather than a tap-to-move because flying is a
+// thing you do for a while, and the deflection is analog, so a small push crawls and a
+// big one sprints. One finger still looks; the second one landing ends the look, because
+// a gesture that both turns and flies is impossible to aim.
 
 import type { FlyCamera } from "./camera.ts";
 
@@ -37,6 +45,48 @@ export function wheelDolly(speed: number, deltaY: number, deltaMode = 0): number
   return -notches * speed * WHEEL_SECONDS;
 }
 
+// A pinch of this many pixels is one wheel notch. Bigger than a notch of scroll on
+// purpose: fingers travel further than a wheel does, and the two should cross a room
+// with about the same effort.
+const PINCH_PX = 90;
+// The stick's dead zone and the deflection that means full speed, in pixels. The dead
+// zone is what keeps a pinch from also creeping forward: two fingers never spread without
+// their midpoint wandering a few pixels.
+const STICK_DEAD_PX = 14;
+const STICK_FULL_PX = 150;
+// Fingers tracked at once. Two drive everything; the rest are ignored rather than
+// dropped, so resting a palm does not end the gesture.
+const MAX_TOUCHES = 8;
+
+// Voxels to fly for a pinch, from one finger distance to another, as a slice of a
+// second's travel like a wheel notch. Positive is towards whatever is between the
+// fingers, which is spreading them. Pure; the class applies it along the ray through
+// their midpoint.
+export function pinchDolly(speed: number, from: number, to: number): number {
+  if (!Number.isFinite(from) || !Number.isFinite(to) || from <= 0 || to <= 0) return 0;
+  const notches = Math.max(-MAX_NOTCHES, Math.min(MAX_NOTCHES, (to - from) / PINCH_PX));
+  return notches * speed * WHEEL_SECONDS;
+}
+
+// One axis of the two-finger stick: how far the fingers have travelled from where they
+// landed, as a fraction of full speed, past a dead zone. Pure.
+export function stickAxis(offsetPx: number): number {
+  if (!Number.isFinite(offsetPx)) return 0;
+  const past = Math.abs(offsetPx) - STICK_DEAD_PX;
+  if (past <= 0) return 0;
+  return Math.sign(offsetPx) * Math.min(1, past / (STICK_FULL_PX - STICK_DEAD_PX));
+}
+
+// How far to travel along one axis of the move vector this frame. Keys are a direction,
+// so a diagonal is normalised and moves at the base speed; the touch stick is a
+// deflection, so half of one is half the speed. Dividing by the magnitude only once it is
+// past one does both. Pure.
+export function stepScale(speed: number, sprinting: boolean, dt: number, f: number, r: number, u: number): number {
+  const mag = Math.sqrt(f * f + r * r + u * u);
+  if (mag === 0 || !Number.isFinite(mag) || !(dt > 0)) return 0;
+  return (speed * (sprinting ? SPRINT_FACTOR : 1) * dt) / Math.max(1, mag);
+}
+
 // The base speed after one press of + or -, kept in range. Pure.
 export function stepSpeed(speed: number, factor: number): number {
   if (!Number.isFinite(factor) || factor <= 0) return speed;
@@ -66,6 +116,18 @@ export class FlyControls {
   // cursor positions are two different directions and have to add as vectors.
   private readonly dolly = new Float64Array(3);
   private readonly dollyDir = new Float64Array(3);
+  // Fingers on the canvas, as parallel arrays so a gesture allocates nothing.
+  private readonly touchId = new Int32Array(MAX_TOUCHES).fill(-1);
+  private readonly touchX = new Float64Array(MAX_TOUCHES);
+  private readonly touchY = new Float64Array(MAX_TOUCHES);
+  private touches = 0;
+  // The two-finger gesture: where the midpoint started, how far apart the fingers were
+  // at the last move, and the stick as it stands. -1 for the distance means no gesture.
+  private pinchFrom = -1;
+  private stickOriginX = 0;
+  private stickOriginY = 0;
+  private stickForward = 0;
+  private stickStrafe = 0;
 
   // Kept so `dispose()` can take them off again. Two of them are on the window rather
   // than the canvas, because a key released after the pointer left the canvas still has
@@ -125,6 +187,12 @@ export class FlyControls {
     return this.sprint;
   }
 
+  // True while two fingers are flying the camera. What a click means is the host's
+  // business, but a finger lifted off a gesture is not one.
+  get gesturing(): boolean {
+    return this.touches >= 2;
+  }
+
   update(dt: number): void {
     const cam = this.camera;
     if (this.lookX !== 0 || this.lookY !== 0) {
@@ -140,11 +208,11 @@ export class FlyControls {
       d[1] = 0;
       d[2] = 0;
     }
-    const f = (this.forward ? 1 : 0) - (this.back ? 1 : 0);
-    const r = (this.right ? 1 : 0) - (this.left ? 1 : 0);
+    const f = (this.forward ? 1 : 0) - (this.back ? 1 : 0) + this.stickForward;
+    const r = (this.right ? 1 : 0) - (this.left ? 1 : 0) + this.stickStrafe;
     const u = (this.up ? 1 : 0) - (this.down ? 1 : 0);
-    if (f === 0 && r === 0 && u === 0) return;
-    const step = (this.speed * (this.sprint ? SPRINT_FACTOR : 1) * dt) / Math.sqrt(f * f + r * r + u * u);
+    const step = stepScale(this.speed, this.sprint, dt, f, r, u);
+    if (step === 0) return;
     const b = cam.basis;
     cam.translate(
       (b[0] * r + b[6] * f) * step,
@@ -223,9 +291,23 @@ export class FlyControls {
 
   private releaseKeys(): void {
     this.forward = this.back = this.left = this.right = this.up = this.down = this.sprint = false;
+    this.stickForward = 0;
+    this.stickStrafe = 0;
   }
 
   private onPointerDown(e: PointerEvent): void {
+    if (e.pointerType === "touch") {
+      this.addTouch(e);
+      if (this.touches >= 2) {
+        // The second finger ends the look and starts the two-finger gesture: turning and
+        // flying at once cannot be aimed, and the finger that was looking is now half of
+        // the stick.
+        this.endLook();
+        this.beginGesture();
+        e.preventDefault();
+        return;
+      }
+    }
     if (this.dragId !== -1) return; // one pointer looks at a time
     if (e.pointerType === "mouse" && e.button !== 0) return;
     e.preventDefault(); // no text selection or focus change from a drag on the canvas
@@ -241,6 +323,12 @@ export class FlyControls {
   }
 
   private onPointerMove(e: PointerEvent): void {
+    if (e.pointerType === "touch" && this.moveTouch(e)) {
+      if (this.touches >= 2) {
+        this.trackGesture();
+        return;
+      }
+    }
     if (e.pointerId !== this.dragId) return;
     this.lookX += (e.clientX - this.dragX) * this.dragRate;
     this.lookY += (e.clientY - this.dragY) * this.dragRate;
@@ -250,6 +338,85 @@ export class FlyControls {
 
   private onPointerUp(e: PointerEvent): void {
     if (e.pointerId === this.dragId) this.dragId = -1;
+    if (e.pointerType !== "touch") return;
+    const had = this.touches;
+    this.removeTouch(e.pointerId);
+    if (had >= 2 && this.touches < 2) this.endGesture();
+    // A finger left over from a gesture looks again, from where it is now rather than
+    // from where it landed, or the view snaps by however far the gesture travelled.
+    if (this.touches === 1 && this.dragId === -1) {
+      this.dragId = this.touchId[0];
+      this.dragX = this.touchX[0];
+      this.dragY = this.touchY[0];
+      this.dragRate = TOUCH_RADIANS_PER_PX;
+    }
+  }
+
+  // --- touch bookkeeping ---------------------------------------------------------
+
+  private addTouch(e: PointerEvent): void {
+    if (this.indexOfTouch(e.pointerId) !== -1 || this.touches >= MAX_TOUCHES) return;
+    const i = this.touches++;
+    this.touchId[i] = e.pointerId;
+    this.touchX[i] = e.clientX;
+    this.touchY[i] = e.clientY;
+  }
+
+  private moveTouch(e: PointerEvent): boolean {
+    const i = this.indexOfTouch(e.pointerId);
+    if (i === -1) return false;
+    this.touchX[i] = e.clientX;
+    this.touchY[i] = e.clientY;
+    return true;
+  }
+
+  private removeTouch(id: number): void {
+    const i = this.indexOfTouch(id);
+    if (i === -1) return;
+    const last = --this.touches;
+    this.touchId[i] = this.touchId[last];
+    this.touchX[i] = this.touchX[last];
+    this.touchY[i] = this.touchY[last];
+    this.touchId[last] = -1;
+  }
+
+  private indexOfTouch(id: number): number {
+    for (let i = 0; i < this.touches; i++) if (this.touchId[i] === id) return i;
+    return -1;
+  }
+
+  private endLook(): void {
+    if (this.dragId === -1) return;
+    if (this.canvas.hasPointerCapture(this.dragId)) this.canvas.releasePointerCapture(this.dragId);
+    this.dragId = -1;
+  }
+
+  // The first two fingers are the gesture; where they are now is where the stick rests
+  // and how far apart they are is where the pinch starts.
+  private beginGesture(): void {
+    this.stickOriginX = (this.touchX[0] + this.touchX[1]) / 2;
+    this.stickOriginY = (this.touchY[0] + this.touchY[1]) / 2;
+    this.pinchFrom = Math.hypot(this.touchX[0] - this.touchX[1], this.touchY[0] - this.touchY[1]);
+    this.stickForward = 0;
+    this.stickStrafe = 0;
+  }
+
+  private trackGesture(): void {
+    const midX = (this.touchX[0] + this.touchX[1]) / 2;
+    const midY = (this.touchY[0] + this.touchY[1]) / 2;
+    // Up the screen is forward, which is why the sign flips: clientY grows downwards.
+    this.stickStrafe = stickAxis(midX - this.stickOriginX);
+    this.stickForward = stickAxis(this.stickOriginY - midY);
+    const apart = Math.hypot(this.touchX[0] - this.touchX[1], this.touchY[0] - this.touchY[1]);
+    const amount = pinchDolly(this.speed, this.pinchFrom, apart);
+    this.pinchFrom = apart;
+    if (amount !== 0) this.addDolly(midX, midY, amount);
+  }
+
+  private endGesture(): void {
+    this.pinchFrom = -1;
+    this.stickForward = 0;
+    this.stickStrafe = 0;
   }
 
   private scaleSpeed(factor: number): void {
@@ -259,6 +426,13 @@ export class FlyControls {
   private onWheel(e: WheelEvent): void {
     const amount = wheelDolly(this.speed, e.deltaY, e.deltaMode);
     if (amount === 0) return;
+    this.addDolly(e.clientX, e.clientY, amount);
+  }
+
+  // Adds a step of flight along the ray through a point on the canvas, which is what
+  // both the wheel and a pinch are: towards what is under the cursor or between the
+  // fingers, not along the view.
+  private addDolly(clientX: number, clientY: number, amount: number): void {
     // Where the cursor is, as NDC over the canvas as it is displayed. The rect and
     // `clientX`/`clientY` are in the same space whatever the page zoom is, which
     // `offsetX` is not: under browser zoom Chrome reports it scaled, so the centre of
@@ -269,8 +443,8 @@ export class FlyControls {
     // projection used. Under `?size=` the element is letterboxed to that same aspect, so
     // the two agree; the render target is still the one to ask.
     const aspect = this.canvas.height > 0 ? this.canvas.width / this.canvas.height : 1;
-    const ndcX = rect.width > 0 ? ((e.clientX - rect.left) / rect.width) * 2 - 1 : 0;
-    const ndcY = rect.height > 0 ? 1 - ((e.clientY - rect.top) / rect.height) * 2 : 0;
+    const ndcX = rect.width > 0 ? ((clientX - rect.left) / rect.width) * 2 - 1 : 0;
+    const ndcY = rect.height > 0 ? 1 - ((clientY - rect.top) / rect.height) * 2 : 0;
     const dir = this.camera.rayThrough(ndcX, ndcY, aspect, this.dollyDir);
     this.dolly[0] += dir[0] * amount;
     this.dolly[1] += dir[1] * amount;

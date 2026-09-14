@@ -94,6 +94,7 @@ const DEFAULT_VOXEL_SLOTS = 8;
 
 const CONTROLS_HELP = "drag: look (mouse or touch)  WASD move  Space/C up/down  Shift sprint\n" +
   "wheel: fly to and from the cursor  +/- speed\n" +
+  "touch: two fingers fly (drag to go, pinch to approach)\n" +
   "F2 overlay (its text is selectable)  P preview  G grid  M meshes\n" +
   "K follow the ground below the camera; +/- set its speed and Space/C its height while it flies\n" +
   "E place  Q remove  R rotate (Shift+R back)  B block  X shape  Z undo  Y redo\n" +
@@ -875,6 +876,8 @@ canvas.addEventListener("pointerup", (e) => {
   if (e.pointerId !== clickId) return;
   clickId = -1;
   if (Math.hypot(e.clientX - clickX, e.clientY - clickY) > CLICK_SLOP_PX) return;
+  // A finger coming off a two-finger flight is not a click, however still it was held.
+  if (controls.gesturing) return;
   // With `mark` on a click asks about the pixel instead of picking a bird: the two would
   // both fire on the same click, and marking is the deliberate one.
   if (marking) void markAt(e.clientX, e.clientY);

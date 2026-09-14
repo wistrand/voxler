@@ -278,7 +278,11 @@ forces the SDF preview on (it starts off while meshes are drawn, and its pipelin
 built the first time it is switched on, not at startup). Look by dragging
 (mouse or touch); the wheel flies towards and away from whatever the cursor is over
 (not along the view: a thing can be approached without turning to face it), and +/-
-change the speed. On-screen: a small panel top right with the frame rate, the switches worth reaching for
+change the speed. Touch has neither keys nor a wheel, so two fingers carry both: where
+they have moved from where they landed is a stick that flies while it is held (up the
+screen is forward, across is a strafe) and the deflection is analog, and spreading or
+closing them is the wheel. The second finger landing ends the look, because a gesture
+that turns and flies at once cannot be aimed. On-screen: a small panel top right with the frame rate, the switches worth reaching for
 (sky, far field, shadows, meshes, SDF preview, chunk grid, the axis cross, the follow
 flyover, marking, the debug overlay), a line of what the world is currently holding (resident chunks and the voxels
 they stand for, quads, clusters drawn against clusters live, far-field bricks) and, while
