@@ -71,6 +71,13 @@ export interface Slab {
   level: number; // index into the levels, not k
   axis: number;
   plane: number; // brick coordinate along `axis`
+  // The level's origin along the other two axes when the slab was taken, which is the
+  // origin the GPU samples and writes it with. A build takes several frames to come
+  // back, and by then the window may have scrolled: the cells the slab covers are the
+  // ones it covered when it left, not the ones the same plane covers now (`applyReport`,
+  // and gotchas.md "A slab that comes back after the window moved").
+  u0: number;
+  v0: number;
 }
 
 export class Clipmap {
@@ -377,6 +384,8 @@ export class Clipmap {
       out.level = level;
       out.axis = axis;
       out.plane = plane;
+      out.u0 = this.origins[level * 3 + OTHER[axis][0]];
+      out.v0 = this.origins[level * 3 + OTHER[axis][1]];
       this.flight.push(level, axis, plane);
       const size = this.options.size;
       for (let v = 0; v < size; v++) {
@@ -393,14 +402,31 @@ export class Clipmap {
     return false;
   }
 
-  // Grid cell of one brick of a slab, by its in-slab coordinates.
+  // Grid cell of one brick of a slab, by its in-slab coordinates, against the level's
+  // origin as it is now.
   slabCell(level: number, axis: number, plane: number, u: number, v: number): number {
-    const au = OTHER[axis][0], av = OTHER[axis][1];
     const o = level * 3;
+    return this.slabCellAt(level, axis, plane, this.origins[o + OTHER[axis][0]], this.origins[o + OTHER[axis][1]], u, v);
+  }
+
+  // The same against the origin a slab was taken with, which is the one the GPU built it
+  // with. Anything that comes back from the GPU has to use this: the toroidal cell of a
+  // brick does not move, but which brick sits at `u, v` of a slab does, every time the
+  // window scrolls along one of the other two axes.
+  private slabCellAt(
+    level: number,
+    axis: number,
+    plane: number,
+    u0: number,
+    v0: number,
+    u: number,
+    v: number,
+  ): number {
+    const au = OTHER[axis][0], av = OTHER[axis][1];
     const b = this.brick;
     b[axis] = plane;
-    b[au] = this.origins[o + au] + u;
-    b[av] = this.origins[o + av] + v;
+    b[au] = u0 + u;
+    b[av] = v0 + v;
     return this.cellOf(level, b[0], b[1], b[2]);
   }
 
@@ -442,7 +468,11 @@ export class Clipmap {
     let used = 0;
     for (let v = 0; v < size; v++) {
       for (let u = 0; u < size; u++) {
-        const cell = this.slabCell(slab.level, slab.axis, slab.plane, u, v);
+        // The origin the slab left with, not the one the level has now: the GPU wrote
+        // the bricks that were at `u, v` then, and writing them anywhere else here frees
+        // slots the GPU is still pointing at. What that looks like is another place's
+        // ground standing in mid-air, and it was how it was found.
+        const cell = this.slabCellAt(slab.level, slab.axis, slab.plane, slab.u0, slab.v0, u, v);
         const entry = entries[u + v * size];
         // The shadow mirrors the GPU even when the slab has scrolled since: the queue
         // holds a rebuild for those cells, and it is what frees these slots.

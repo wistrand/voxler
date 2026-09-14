@@ -107,6 +107,11 @@ const DEBUG_NONE: u32 = 0u;
 const DEBUG_STEPS: u32 = 1u;
 const DEBUG_BRICKS: u32 = 2u;
 const DEBUG_LEVELS: u32 = 3u;
+const DEBUG_BLOCK: u32 = 4u;
+const DEBUG_HEIGHT: u32 = 5u;
+
+// Words in the marked-ray probe buffer, in step with src/debug/mark.ts.
+const PROBE_WORDS = 24u;
 
 // March pixels per beam tile, in step with src/far/far-field.ts.
 const BEAM_TILE: u32 = 8u;
@@ -155,6 +160,77 @@ fn cell_light(level: u32, cell: vec3i) -> f32 {
   return block_colors.color[min(id, 255u) * 3u + 1u].w;
 }
 
+// Whether one cell of a level holds anything. Same lookup as `cell_light`: the cell may
+// be in the brick next door, and a brick that is solid throughout has no cells of its own.
+fn cell_filled(level: u32, cell: vec3i) -> bool {
+  let b = cell >> vec3u(3u); // BRICK_CELLS is 8
+  let entry = brick_entry(level, b);
+  if (entry == 0u) {
+    return false;
+  }
+  if ((entry & ENTRY_SOLID) != 0u) {
+    return true;
+  }
+  return cell_solid(entry - 1u, cell - b * BRICK_CELLS);
+}
+
+// The normal of a hit that crossed no face. The ray entered this level's window already
+// inside solid ground, because the levels quantize a surface differently and this level's
+// ground starts where the last one's had not, so there is no face to report and
+// `-sign(dir[axis])` is not one: read as a Y face it points *down* for every ray that is
+// climbing, which is a line of black cells along every level boundary the camera looks up
+// at, and read as an up face it is a line of bright ones on a slope drawn as risers
+// (gotchas.md "A level boundary the camera looks up at is a line of black cells").
+//
+// So find the face rather than guess it: walk back along the ray to where it entered the
+// solid and take the face it crossed there. The walk stays inside the window, because a
+// cell outside it is another part of the world through the toroidal indirection, and it
+// stops after two bricks, which is as deep as the levels can disagree. A hit with no way
+// out within that falls back to the cells around it, and a cell with nothing around it to
+// go on answers up, which is what terrain mostly is.
+fn entry_normal(level: u32, cell: vec3i, dir: vec3f, t_voxels: f32) -> vec3f {
+  let cell_voxels = f32(far.level[level].info.x);
+  let extent = f32(far.level[level].info.y);
+  let p0 = (far.eye.xyz + vec3f(far.level[level].offset.xyz)) / cell_voxels;
+  let pos = p0 + dir * (t_voxels / cell_voxels);
+  var prev = cell;
+  for (var i = 1; i <= 32; i++) {
+    let q = pos - dir * (f32(i) * 0.5);
+    if (any(q < vec3f(0.0)) || any(q >= vec3f(extent))) {
+      break;
+    }
+    let c = vec3i(floor(q));
+    if (all(c == prev)) {
+      continue;
+    }
+    if (!cell_filled(level, c)) {
+      // The ray crossed from `c` into `prev`: the face is the axis it moved on, and the
+      // normal points back the way it came.
+      let d = vec3f(c - prev);
+      let a = abs(d);
+      var n = vec3f(0.0);
+      if (a.x >= a.y && a.x >= a.z) {
+        n.x = sign(d.x);
+      } else if (a.y >= a.z) {
+        n.y = sign(d.y);
+      } else {
+        n.z = sign(d.z);
+      }
+      return n;
+    }
+    prev = c;
+  }
+  let g = vec3f(
+    f32(cell_filled(level, cell - vec3i(1, 0, 0))) - f32(cell_filled(level, cell + vec3i(1, 0, 0))),
+    f32(cell_filled(level, cell - vec3i(0, 1, 0))) - f32(cell_filled(level, cell + vec3i(0, 1, 0))),
+    f32(cell_filled(level, cell - vec3i(0, 0, 1))) - f32(cell_filled(level, cell + vec3i(0, 0, 1))),
+  );
+  if (all(g == vec3f(0.0))) {
+    return vec3f(0.0, 1.0, 0.0);
+  }
+  return normalize(g);
+}
+
 // What the glowing blocks around a hit put on it, as a block-light level for
 // `block_light()` in shading.wgsl. The near field bakes this per quad corner in the mesh
 // job; the far field has no mesh, so it asks the cells around the hit at shading time.
@@ -187,6 +263,9 @@ fn gathered_light(level: u32, cell: vec3i, cell_voxels: f32) -> f32 {
   }
   return max(best, 0.0);
 }
+
+// `Hit.axis` for a hit the ray began inside, where no face was crossed (`entry_normal`).
+const FACE_NONE = 3u;
 
 struct Hit {
   hit: bool,
@@ -308,8 +387,10 @@ fn march_level(level: u32, dir: vec3f, t_voxels: f32, out: ptr<function, Hit>) -
   var t = (next - p0) * inv;
   let dt = abs(inv) * f32(BRICK_CELLS);
   // The face the ray crossed to enter the current brick, for shading a brick that is
-  // solid throughout: there is no cell walk to report one.
-  var face = 1u;
+  // solid throughout: there is no cell walk to report one. It starts as no face at all,
+  // because the ray has crossed none yet: it entered the level's window, which is a box
+  // around the camera and not a surface.
+  var face = FACE_NONE;
   for (var i = 0u; i < far.grid.y; i++) {
     (*out).bricks++;
     let entry = brick_entry(level, brick);
@@ -435,6 +516,63 @@ fn beam_far(@builtin(global_invocation_id) gid: vec3u) {
   textureStore(out_beam, vec2i(gid.xy), vec4f(start, 0.0, 0.0, 0.0));
 }
 
+// One marked ray, marched from zero and written out in full: what the `mark` switch sends
+// back when someone clicks on something that looks wrong (src/debug/mark.ts). Its own
+// entry point rather than another debug view, because a debug view is a colour to read
+// off a screenshot and this is the numbers themselves. The word layout is owned by
+// src/debug/mark.ts and checked by src/debug/mark_test.ts.
+@group(1) @binding(0) var<storage, read_write> probe: array<u32, PROBE_WORDS>;
+
+@compute @workgroup_size(1)
+fn probe_far() {
+  let ndc = vec2f(bitcast<f32>(probe[0]), bitcast<f32>(probe[1]));
+  let a = far.inv_view_proj * vec4f(ndc, 1.0, 1.0);
+  let b = far.inv_view_proj * vec4f(ndc, 0.5, 1.0);
+  let dir = normalize(b.xyz / b.w - a.xyz / a.w);
+  // What the beam pre-pass would have told the frame to skip, so a hit the frame missed
+  // can be told from a hit that is not there.
+  var t = 0.0;
+  var beam = BEAM_MISS;
+  for (var level = 0u; level < far.counts.x; level++) {
+    let got = beam_level(level, dir, t);
+    if (got >= 0.0) {
+      beam = got;
+      break;
+    }
+    t = max(-got, t);
+  }
+  // From zero, not from the beam: the ground truth for this ray, whatever the frame did.
+  let hit = march(dir, 0.0);
+  let cell_voxels = far.level[hit.level].info.x;
+  let world_base = far.camera_chunk.xyz * 32 - far.level[hit.level].offset.xyz;
+  let world = hit.cell * i32(cell_voxels) + world_base;
+  let depth_size = vec2f(textureDimensions(near_depth));
+  let pixel = vec2i(clamp(
+    (vec2f(ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5)) * depth_size,
+    vec2f(0.0),
+    depth_size - 1.0,
+  ));
+  probe[2] = bitcast<u32>(dir.x);
+  probe[3] = bitcast<u32>(dir.y);
+  probe[4] = bitcast<u32>(dir.z);
+  probe[5] = select(0u, 1u, hit.hit);
+  probe[6] = select(0u, 1u, hit.stopped);
+  probe[7] = hit.block;
+  probe[8] = hit.axis;
+  probe[9] = hit.level;
+  probe[10] = hit.steps;
+  probe[11] = hit.bricks;
+  probe[12] = u32(cell_voxels);
+  probe[13] = bitcast<u32>(world.x);
+  probe[14] = bitcast<u32>(world.y);
+  probe[15] = bitcast<u32>(world.z);
+  probe[16] = bitcast<u32>(hit.t);
+  probe[17] = bitcast<u32>(beam);
+  probe[18] = select(0u, 1u, near_covers(world));
+  probe[19] = bitcast<u32>(textureLoad(near_depth, pixel, 0));
+  probe[20] = far.counts.x; // levels the march reads
+}
+
 fn march(dir: vec3f, start: f32) -> Hit {
   var out = Hit(false, false, 0u, 0u, 0u, vec3i(0), 0.0, 0u, 0u);
   var t = start;
@@ -495,6 +633,19 @@ fn march_far(@builtin(global_invocation_id) gid: vec3u) {
   } else if (far.grid.w == DEBUG_BRICKS) {
     let heat = f32(result.bricks) / 128.0;
     color = vec4f(heat, heat * 0.4, 1.0 - heat, 1.0);
+  } else if (far.grid.w == DEBUG_HEIGHT && result.hit) {
+    // The hit cell's world height in the red channel, `(y + 512) / 1024`, so a screenshot
+    // answers where a cell is rather than what it looks like. Reading two of these back
+    // is how the rock patches in the forest's snowfield were traced to the height they
+    // stand at (gotchas.md "What that cell is made of, and where it is").
+    let cv = f32(far.level[result.level].info.x);
+    let wy = f32(far.camera_chunk.y * 32 - far.level[result.level].offset.y) + f32(result.cell.y) * cv;
+    color = vec4f((wy + 512.0) / 1024.0, 0.0, 0.0, 1.0);
+  } else if (far.grid.w == DEBUG_BLOCK && result.hit) {
+    // The block id in the red channel, `id / 255`, for the same reason: a screenshot of
+    // this says what every cell in the frame is made of, and the answer is exact rather
+    // than guessed from a colour that lighting and fog have already been through.
+    color = vec4f(f32(min(result.block, 255u)) / 255.0, 0.0, 0.0, 1.0);
   } else if (far.grid.w == DEBUG_LEVELS && result.hit) {
     // One hue per level, so the rings are visible.
     let l = f32(result.level) / max(1.0, f32(far.counts.x - 1u));
@@ -504,7 +655,11 @@ fn march_far(@builtin(global_invocation_id) gid: vec3u) {
     // fogged by shading.wgsl, the near field's own functions, or the two fields would
     // meet at a visible line.
     var n = vec3f(0.0);
-    n[result.axis] = -sign(dir[result.axis]);
+    if (result.axis == FACE_NONE) {
+      n = entry_normal(result.level, result.cell, dir, result.t);
+    } else {
+      n[result.axis] = -sign(dir[result.axis]);
+    }
     let known = min(result.block, 255u);
     let albedo = block_colors.color[known * 3u].rgb;
     let glow = block_colors.color[known * 3u + 1u].rgb;

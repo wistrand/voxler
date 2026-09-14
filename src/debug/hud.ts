@@ -37,6 +37,7 @@ export class Hud {
   private last = 0;
   private next = 0;
   private shown = "";
+  private flashUntil = 0;
   private counted = "";
 
   constructor(parent: HTMLElement, buttons: readonly HudButton[], counts: (() => string) | null = null) {
@@ -83,6 +84,19 @@ export class Hud {
   // The line under the switches, for what the engine is doing before it can draw the
   // world. Empty hides it.
   status(text: string): void {
+    if (this.flashUntil > performance.now()) return; // a flash is showing; don't fight it
+    this.write(text);
+  }
+
+  // The same line, held for a few seconds and not overwritten by `status` while it shows.
+  // For an answer to something the user just did: a status that is cleared by the next
+  // tick of whatever else writes here is a message nobody sees.
+  flash(text: string, ms = 12000): void {
+    this.flashUntil = performance.now() + ms;
+    this.write(text);
+  }
+
+  private write(text: string): void {
     if (text === this.shown) return;
     this.shown = text;
     this.note.textContent = text;

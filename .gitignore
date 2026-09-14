@@ -7,3 +7,5 @@ dist-npm/
 node_modules/
 .mcp.json
 /bench/
+# Marks: what the `mark` switch posts back, local to one machine like bench results.
+/marks/

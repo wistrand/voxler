@@ -739,6 +739,14 @@ export class Renderer {
       this.near.draw(passB, 1);
       passB.end();
       counters.draws++;
+      // Before anything else writes to the frame's colour or depth: compare the near
+      // field against an unculled draw of the same frame. After the bird pass it
+      // compared a frame with birds in it against a draw that has none, so every check
+      // failed in a world that has them, by as much as 160k pixels in the forest
+      // (gotchas.md "A cull check that runs after the birds").
+      if (check) {
+        this.near.encodeCullCheck(encoder, this.frameBindGroup, this.width, this.height, target, this.nearDepth.view);
+      }
     }
     // Birds after the near field's depth is complete and before the far field marches,
     // which reads that depth to skip pixels the raster pass already covered: a bird that
@@ -769,11 +777,6 @@ export class Renderer {
       if (this.tracked >= 0 && this.birdTrack !== null) {
         this.birdTrack.copy(encoder, this.birdState!, this.tracked * BIRD_STATE_FLOATS * 4);
       }
-    }
-    // Before the background paints over the near field: compare it against an
-    // unculled draw of the same frame.
-    if (check) {
-      this.near.encodeCullCheck(encoder, this.frameBindGroup, this.width, this.height, target, this.nearDepth.view);
     }
     this.passDescriptor.timestampWrites = this.timer.passWrites(PASS_MAIN);
     // The far field marches after the near passes, so it can read their depth and skip

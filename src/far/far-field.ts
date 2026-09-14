@@ -25,6 +25,7 @@ import { worldSources } from "../sdf/sources.ts";
 import type { WorldProgram } from "../worlds/index.ts";
 import type { TextureData } from "../render/textures.ts";
 import { CoverageMask, COVERAGE_WORDS } from "./coverage.ts";
+import { PROBE_WORDS, WORLD_PROBE_SAMPLES, WORLD_PROBE_WORDS } from "./probe.ts";
 import skyColorWgsl from "../render/sky-color.wgsl" with { type: "text" };
 import { skyConstantsWgsl } from "../render/sky.ts";
 import shadingWgsl from "../render/shading.wgsl" with { type: "text" };
@@ -173,17 +174,16 @@ export class FarField {
   private readonly buildI32 = new Int32Array(this.buildParams);
   private readonly buildU32 = new Uint32Array(this.buildParams);
   private readonly ring: RingSlot[] = [];
-  private readonly nextSlab: Slab = { level: 0, axis: 0, plane: 0 };
   private readonly zeros: Uint32Array;
   private readonly slotScratch = new Uint32Array(1);
   private readonly offsets = [0]; // scratch for the build pass's dynamic offset
   private readonly copies = new Int32Array(RING); // report copies to encode after the pass
   private readonly fresh = new Int32Array(CLEARS * 3); // slabs to blank this frame
   private readonly zeroedLevels = new Int32Array(MAX_LEVELS);
-  private readonly freshSlab: Slab = { level: 0, axis: 0, plane: 0 };
+  private readonly freshSlab: Slab = { level: 0, axis: 0, plane: 0, u0: 0, v0: 0 };
   // The reduce dispatch reads only the range fields of the params, but writeBuildParams
   // wants a slab; this one is never read by the shader.
-  private readonly coarseSlab: Slab = { level: 0, axis: 2, plane: 0 };
+  private readonly coarseSlab: Slab = { level: 0, axis: 2, plane: 0, u0: 0, v0: 0 };
   private readonly copySlots = new Int32Array(RING);
   private readonly entry = new Uint32Array(1);
   private pipeline: GPUComputePipeline | null = null;
@@ -191,6 +191,19 @@ export class FarField {
   private clearPipeline: GPUComputePipeline | null = null;
   private reducePipeline: GPUComputePipeline | null = null;
   private blitPipeline: GPURenderPipeline | null = null;
+  // The marked-ray and marked-point probes (`mark` in the panel, src/debug/mark.ts).
+  // Built on the first mark rather than at startup: a session that never marks anything
+  // pays nothing, and a mark is a click, not a frame.
+  private marchModule: GPUShaderModule | null = null;
+  private buildModule: GPUShaderModule | null = null;
+  private probes: Promise<void> | null = null;
+  private probeLayout: GPUBindGroupLayout | null = null;
+  private probeMarch: GPUComputePipeline | null = null;
+  private probeWorldPipeline: GPUComputePipeline | null = null;
+  private probeBuffer: GPUBuffer | null = null;
+  private probeGroup: GPUBindGroup | null = null;
+  private worldProbeBuffer: GPUBuffer | null = null;
+  private worldProbeGroup: GPUBindGroup | null = null;
   private buildBindGroup: GPUBindGroup | null = null;
   private bindGroup: GPUBindGroup | null = null;
   private beamBindGroup: GPUBindGroup | null = null;
@@ -284,7 +297,7 @@ export class FarField {
         }),
         slots: new Uint32Array(this.planeBricks),
         upload: new Uint32Array(1 + this.planeBricks),
-        slab: { level: 0, axis: 0, plane: 0 },
+        slab: { level: 0, axis: 0, plane: 0, u0: 0, v0: 0 },
         state: SLOT_FREE,
         taken: 0,
       });
@@ -368,6 +381,11 @@ export class FarField {
       ], report),
     ]);
     if (!march || !blit || !build) return false;
+    // Kept for the probes, which are compiled when someone asks to mark rather than
+    // here: they inline the march and the world program a second time, and on the forest
+    // that is 16 seconds of pipeline compilation nobody who never marks should wait for.
+    this.marchModule = march;
+    this.buildModule = build;
     const buildLayout = device.createPipelineLayout({ label: "far build", bindGroupLayouts: [this.buildLayout] });
     try {
       const [sample, clear, reduce, pipeline, beam] = await Promise.all([
@@ -524,6 +542,162 @@ export class FarField {
     });
   }
 
+  // --- Probes (the `mark` switch, src/debug/mark.ts) -------------------------------
+  //
+  // Both run outside the frame: a mark is a click, so a submit of their own and a map
+  // that is awaited are fine here, and neither touches anything the frame loop holds.
+
+  // Compiles the probe pipelines, once, and hands back the same promise after that.
+  // `mark` in the panel calls this when it is switched on, so the wait lands there
+  // rather than on the click or on every startup.
+  warmProbes(): Promise<void> {
+    if (this.marchModule === null || this.buildModule === null) return Promise.resolve();
+    this.probes ??= this.buildProbes(this.marchModule, this.buildModule);
+    return this.probes;
+  }
+
+  // Neither probe pipeline is small to compile: each inlines something the frame already
+  // has (the march, the world program) a second time.
+  private async buildProbes(march: GPUShaderModule, build: GPUShaderModule): Promise<void> {
+    const device = this.device;
+    this.probeLayout = device.createBindGroupLayout({
+      label: "far probe",
+      entries: [{ binding: 0, visibility: GPUShaderStage.COMPUTE, buffer: { type: "storage" } }],
+    });
+    const usage = GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST;
+    this.probeBuffer = device.createBuffer({ label: "far probe", size: PROBE_WORDS * 4, usage });
+    this.worldProbeBuffer = device.createBuffer({ label: "world probe", size: WORLD_PROBE_WORDS * 4, usage });
+    this.probeGroup = device.createBindGroup({
+      label: "far probe",
+      layout: this.probeLayout,
+      entries: [{ binding: 0, resource: { buffer: this.probeBuffer } }],
+    });
+    this.worldProbeGroup = device.createBindGroup({
+      label: "world probe",
+      layout: this.probeLayout,
+      entries: [{ binding: 0, resource: { buffer: this.worldProbeBuffer } }],
+    });
+    const [probeMarch, probeWorld] = await Promise.all([
+      device.createComputePipelineAsync({
+        label: "far probe",
+        layout: device.createPipelineLayout({
+          label: "far probe",
+          bindGroupLayouts: [this.layout, this.probeLayout],
+        }),
+        compute: { module: march, entryPoint: "probe_far" },
+      }),
+      device.createComputePipelineAsync({
+        label: "world probe",
+        layout: device.createPipelineLayout({
+          label: "world probe",
+          bindGroupLayouts: [this.buildLayout, this.probeLayout],
+        }),
+        compute: { module: build, entryPoint: "probe_world" },
+      }),
+    ]);
+    this.probeMarch = probeMarch;
+    this.probeWorldPipeline = probeWorld;
+  }
+
+  // The staging buffer is made and thrown away per probe on purpose: a map that never
+  // resolves (a lost device, a tab that went away) then costs one buffer instead of
+  // leaving the next mark with nothing to read into.
+  private async runProbe(
+    pipeline: GPUComputePipeline,
+    group0: GPUBindGroup,
+    group1: GPUBindGroup,
+    storage: GPUBuffer,
+    input: Uint32Array,
+    words: number,
+    offset0 = -1,
+  ): Promise<Uint32Array> {
+    const device = this.device;
+    const readBuffer = device.createBuffer({
+      label: "probe read",
+      size: words * 4,
+      usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST,
+    });
+    device.pushErrorScope("validation");
+    try {
+      device.queue.writeBuffer(storage, 0, input);
+      const encoder = device.createCommandEncoder({ label: "probe" });
+      const pass = encoder.beginComputePass({ label: "probe" });
+      pass.setPipeline(pipeline);
+      if (offset0 >= 0) pass.setBindGroup(0, group0, [offset0]);
+      else pass.setBindGroup(0, group0);
+      pass.setBindGroup(1, group1);
+      pass.dispatchWorkgroups(1);
+      pass.end();
+      encoder.copyBufferToBuffer(storage, 0, readBuffer, 0, words * 4);
+      device.queue.submit([encoder.finish()]);
+      await readBuffer.mapAsync(GPUMapMode.READ);
+      const out = new Uint32Array(readBuffer.getMappedRange().slice(0));
+      readBuffer.unmap();
+      return out;
+    } finally {
+      readBuffer.destroy();
+      // Popped in the same call that pushed it, whatever happened in between: an
+      // unpopped scope outlives the probe and swallows the next pass's errors.
+      void device.popErrorScope().then((err) => {
+        if (err !== null) console.error(`probe: ${err.message}`);
+      }).catch(() => {});
+    }
+  }
+
+  // Marches one ray from zero, through the clipmap the frame is using, and reports what
+  // it met. `ndc` is the clicked point in normalised device coordinates.
+  async probeRay(ndcX: number, ndcY: number): Promise<Uint32Array | null> {
+    await this.warmProbes();
+    if (this.probeMarch === null || this.bindGroup === null) return null;
+    const input = new Uint32Array(PROBE_WORDS);
+    new Float32Array(input.buffer)[0] = ndcX;
+    new Float32Array(input.buffer)[1] = ndcY;
+    return await this.runProbe(
+      this.probeMarch!,
+      this.bindGroup,
+      this.probeGroup!,
+      this.probeBuffer!,
+      input,
+      PROBE_WORDS,
+    );
+  }
+
+  // Asks the world program itself along a line of voxels, at two footprints: `fine` is
+  // what the voxelizer would see and `coarse` what the brick builder saw.
+  async probeWorld(
+    origin: readonly [number, number, number],
+    step: readonly [number, number, number],
+    count: number,
+    fine: number,
+    coarse: number,
+  ): Promise<Uint32Array | null> {
+    await this.warmProbes();
+    if (this.probeWorldPipeline === null || this.buildBindGroup === null) return null;
+    const input = new Uint32Array(WORLD_PROBE_WORDS);
+    const asI32 = new Int32Array(input.buffer);
+    const asF32 = new Float32Array(input.buffer);
+    asI32[0] = origin[0];
+    asI32[1] = origin[1];
+    asI32[2] = origin[2];
+    asI32[3] = step[0];
+    asI32[4] = step[1];
+    asI32[5] = step[2];
+    input[6] = Math.max(0, Math.min(WORLD_PROBE_SAMPLES, count));
+    asF32[7] = fine;
+    asF32[8] = coarse;
+    // The build group carries a dynamic offset; any slot will do, the probe reads only
+    // the world seed out of it.
+    return await this.runProbe(
+      this.probeWorldPipeline!,
+      this.buildBindGroup,
+      this.worldProbeGroup!,
+      this.worldProbeBuffer!,
+      input,
+      WORLD_PROBE_WORDS,
+      0,
+    );
+  }
+
   // Moves the clipmap to follow the camera and queues the slabs that scrolled in.
   // Cheap: the work is one origin per level plus whatever crossed a brick boundary.
   update(x: number, y: number, z: number): void {
@@ -577,11 +751,13 @@ export class FarField {
     }
     for (let i = 0; i < this.slabsPerFrame; i++) {
       const slot = this.freeSlot();
-      if (slot === null || !this.map.take(this.nextSlab)) break;
+      // Taken straight into the ring slot's own slab, never copied field by field: the
+      // slab is what the report is applied with frames later, and a field left behind by
+      // a copy is a report applied against the wrong origin. That is exactly what
+      // happened when `u0`/`v0` were added (gotchas.md "A slab that comes back after the
+      // window moved").
+      if (slot === null || !this.map.take(slot.slab)) break;
       const n = this.map.pool.take(slot.slots, 0, this.planeBricks);
-      slot.slab.level = this.nextSlab.level;
-      slot.slab.axis = this.nextSlab.axis;
-      slot.slab.plane = this.nextSlab.plane;
       slot.taken = n;
       slot.state = SLOT_ENCODED;
       // [0] resets the slot cursor the build increments; the rest is the free list it

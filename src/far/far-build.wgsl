@@ -44,6 +44,13 @@ struct FarColors {
 // Per ring slot: [0] the slot cursor, [1 .. 1+B^2] free slots the CPU offered,
 // [1+B^2 .. 1+2*B^2] what this build did with them, copied back.
 @group(0) @binding(7) var<storage, read_write> slab: array<atomic<u32>>;
+// The marked-point world probe, in step with src/debug/mark.ts.
+const WORLD_PROBE_SAMPLES = 24u;
+// Two threads a sample: one asks at a voxel's footprint, the other at the cell's.
+const WORLD_PROBE_THREADS = 48u;
+const WORLD_PROBE_HEADER = 12u;
+const WORLD_PROBE_WORDS = WORLD_PROBE_HEADER + WORLD_PROBE_SAMPLES * 4u;
+
 // Coarse-brick rebuilds (reduce_bricks): REDUCE_WORDS per request, then one report
 // word per request. Layout in src/far/far-field.ts.
 @group(0) @binding(8) var<storage, read_write> reduce: array<u32>;
@@ -123,6 +130,46 @@ fn clear_slab(@builtin(global_invocation_id) gid: vec3u) {
     return;
   }
   out_indirection[grid_cell(slab_brick(i % size, i / size))] = 0u;
+}
+
+// A core sample of the world along a line, at two footprints at once: what the world
+// program says at a marked point, rather than what a brick built some seconds ago
+// remembers. The `mark` switch takes one of these through the cell a click landed on, so
+// "should this be here" is answered by the world itself (src/debug/mark.ts). Brushes are
+// not folded in: this is the world's own answer, and a brush is on the record already.
+// The word layout is owned by src/debug/mark.ts and checked by src/debug/mark_test.ts.
+@group(1) @binding(0) var<storage, read_write> world_probe: array<u32, WORLD_PROBE_WORDS>;
+
+// One point at one footprint per invocation, and no loop: `world_sdf` and
+// `world_material` are each called once here, as they are in `build_slab`. A loop over
+// the samples with a call in it inlines the world program once per call site, and the
+// forest's is big enough that four of them took the far field's pipelines from 185 ms to
+// 66.8 seconds to compile (gotchas.md "A loop with the world program in it is not a loop
+// to the compiler").
+@compute @workgroup_size(WORLD_PROBE_THREADS)
+fn probe_world(@builtin(local_invocation_index) li: u32) {
+  let count = min(world_probe[6], WORLD_PROBE_SAMPLES);
+  if (li >= count * 2u) {
+    return;
+  }
+  world_seed = build.grid.w;
+  let sample = li >> 1u;
+  let fine = (li & 1u) == 0u;
+  let origin = vec3i(
+    bitcast<i32>(world_probe[0]),
+    bitcast<i32>(world_probe[1]),
+    bitcast<i32>(world_probe[2]),
+  );
+  let step = vec3i(
+    bitcast<i32>(world_probe[3]),
+    bitcast<i32>(world_probe[4]),
+    bitcast<i32>(world_probe[5]),
+  );
+  sample_footprint = select(bitcast<f32>(world_probe[8]), bitcast<f32>(world_probe[7]), fine);
+  let p = WorldPoint(origin + step * i32(sample), vec3f(0.5));
+  let at = WORLD_PROBE_HEADER + sample * 4u + select(2u, 0u, fine);
+  world_probe[at] = bitcast<u32>(world_sdf(p));
+  world_probe[at + 1u] = world_material(p);
 }
 
 @compute @workgroup_size(64)

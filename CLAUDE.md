@@ -255,8 +255,11 @@ light and `?shadow=0` stops marching shadow rays; `?sky=<day|night|desert|space>
 world's own sky and lighting preset (`src/render/sky.ts`); `?birds=0` turns the bird flock off in a world
 that has one; `?gizmo=0` starts without the axis cross in the corner, which is what a
 screenshot wants; `?far=0` turns the far
-field off (it is on by default) and `?far=steps|bricks|levels` picks a debug view
-(F queues every clipmap level again);
+field off (it is on by default) and `?far=steps|bricks|levels|blocks|height` picks a debug
+view (F queues every clipmap level again). `blocks` writes the hit's block id into the red
+channel and `height` its world height as `(y + 512) / 1024`, so a screenshot of either is
+read back for an exact answer instead of guessing from a shaded colour
+([gotchas.md](agent_docs/gotchas.md) "What that cell is made of, and where it is");
 `?farLevels=n` sets how many levels are allocated (and so the most the clipmap can
 reach), overriding the default, which is the world's own count trimmed to the distance
 its fog closes the view at (`fogHorizonVoxels()` in `src/render/sky.ts`: levels past it
@@ -277,7 +280,7 @@ built the first time it is switched on, not at startup). Look by dragging
 (not along the view: a thing can be approached without turning to face it), and +/-
 change the speed. On-screen: a small panel top right with the frame rate, the switches worth reaching for
 (sky, far field, shadows, meshes, SDF preview, chunk grid, the axis cross, the follow
-flyover, the debug overlay), a line of what the world is currently holding (resident chunks and the voxels
+flyover, marking, the debug overlay), a line of what the world is currently holding (resident chunks and the voxels
 they stand for, quads, clusters drawn against clusters live, far-field bricks) and, while
 a world is still compiling its pipelines, which stages are outstanding. The counts are
 built on the panel's own quarter-second tick, never in the frame path. The switches that are compiled into the shaders (the sky and shadows) reload
@@ -298,6 +301,19 @@ through the air, so a climb is taken out of the forward step rather than added t
 P SDF preview, G grid, M meshes, F rebuild far-field bricks; editing: E place, Q remove, R rotate (Shift+R the
 other way), B block, X shape, Z undo, Y redo, aimed by the camera ray (overlay `edit`
 line).
+Marking: the panel's `mark` switch turns a click on the view into a record of what is
+under it, saved by the dev server to `marks/<UTC timestamp>.json` (gitignored, and the
+server prints the full path). It answers "look at this weird block", which a screenshot
+cannot: a mark carries the camera and the ray, whether the near field drew that pixel and
+what the chunk under the hit holds if it is resident, what the far field's march from zero
+met (block, level, cell size, the cell's world position, distance, steps, and where the
+beam pre-pass would have started the ray), and the world program's own answer along a line
+through the hit at two footprints, a voxel's and the cell's. Three answers to one
+question, so a disagreement between them names itself (`src/debug/mark.ts`,
+`probe_far` in `src/far/far.wgsl`, `probe_world` in `src/far/far-build.wgsl`). Saving is
+the dev server's alone, like a bench result: the published bundle has no POST in it and
+the mark goes to the console instead.
+
 Console handle: `voxler` (`gpu`, `renderer`, `camera`, `controls`, `follow`, `pool`,
 `store`, `streamer`, `mesher`, `brushes`, `tool`, `edit`). Edits are made with the keys above, through
 `voxler.tool` (`apply`, `place`, `remove`, `undo`, `redo`), or through `voxler.edit`

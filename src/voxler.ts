@@ -426,7 +426,17 @@ export class Voxler {
     if (o.farOn) {
       renderer.showFar = true;
       const debug = o.far.debug;
-      renderer.far.debug = debug === "steps" ? 1 : debug === "bricks" ? 2 : debug === "levels" ? 3 : 0;
+      renderer.far.debug = debug === "steps"
+        ? 1
+        : debug === "bricks"
+        ? 2
+        : debug === "levels"
+        ? 3
+        : debug === "blocks"
+        ? 4
+        : debug === "height"
+        ? 5
+        : 0;
     }
 
     if (!(await renderer.init())) return false; // errors have gone to onError

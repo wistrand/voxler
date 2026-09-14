@@ -10,6 +10,7 @@ import { FlyCamera } from "./camera/camera.ts";
 import { FlyControls } from "./camera/controls.ts";
 import { ease, Follow, type FollowState, raiseHeight } from "./camera/follow.ts";
 import { Hud, type HudButton } from "./debug/hud.ts";
+import { collectMark, saveMark } from "./debug/mark.ts";
 import { Overlay } from "./debug/overlay.ts";
 import { CPU_FRAME, CPU_RENDER, CPU_UPDATE, Stats } from "./debug/stats.ts";
 import { formatCaps } from "./gpu/caps.ts";
@@ -58,6 +59,9 @@ declare global {
     // console: `voxler.follow.speed = 60`, `voxler.follow.height = 40`.
     controls?: FlyControls;
     follow?: Follow;
+    // `voxler.mark(u, v)` takes a mark at a fraction across and down the view, the same
+    // thing the panel's `mark` switch does on a click (src/debug/mark.ts).
+    mark?: (u?: number, v?: number) => Promise<void>;
     store?: ChunkStore;
     streamer?: ChunkStreamer;
     mesher?: MeshScheduler;
@@ -782,7 +786,17 @@ async function start(): Promise<void> {
   }
   if (farOn) {
     renderer.showFar = true;
-    renderer.far.debug = farMode === "steps" ? 1 : farMode === "bricks" ? 2 : farMode === "levels" ? 3 : 0;
+    renderer.far.debug = farMode === "steps"
+      ? 1
+      : farMode === "bricks"
+      ? 2
+      : farMode === "levels"
+      ? 3
+      : farMode === "blocks"
+      ? 4
+      : farMode === "height"
+      ? 5
+      : 0;
     // Bricks are sampled from the world SDF as the clipmap follows the camera, so
     // nothing has to be resident. F queues every level again.
     if (farCheck) setTimeout(() => runFarCheck(renderer), 20000);
@@ -861,7 +875,10 @@ canvas.addEventListener("pointerup", (e) => {
   if (e.pointerId !== clickId) return;
   clickId = -1;
   if (Math.hypot(e.clientX - clickX, e.clientY - clickY) > CLICK_SLOP_PX) return;
-  void pickBirdAt(e.clientX, e.clientY);
+  // With `mark` on a click asks about the pixel instead of picking a bird: the two would
+  // both fire on the same click, and marking is the deliberate one.
+  if (marking) void markAt(e.clientX, e.clientY);
+  else void pickBirdAt(e.clientX, e.clientY);
 });
 canvas.addEventListener("pointercancel", () => {
   clickId = -1;
@@ -1043,6 +1060,12 @@ function cycleSky(): void {
 
 globalThis.voxler.controls = controls;
 globalThis.voxler.follow = follow;
+// `voxler.mark(u, v)` takes a mark without the switch or a click, at a fraction across
+// and down the view (0.5, 0.5 is the middle). The same path the click takes.
+globalThis.voxler.mark = (u = 0.5, v = 0.5) => {
+  const rect = canvas.getBoundingClientRect();
+  return markAt(rect.left + rect.width * u, rect.top + rect.height * v);
+};
 
 // Clicking a bird picks it out. A click is a pointer that went down and came up in about
 // the same place; anything further is a drag of the view, which is what the canvas is
@@ -1080,6 +1103,86 @@ async function pickBirdAt(clientX: number, clientY: number): Promise<void> {
   );
   renderer.selectBird(hit);
   pickedText = hit === NO_BIRD ? "" : describeBird(state, hit);
+}
+
+// Marking (src/debug/mark.ts): with the switch on, a click on the view collects what the
+// engine knows about that pixel and posts it to the dev server, which writes it under
+// marks/. It is the answer to "look at this weird block": a shaded colour cannot say
+// whether a block is the block it looks like, a face turned away from the light, or a
+// hole with something behind it, and this asks the far field, the chunk store and the
+// world program the same question and writes down all three answers.
+let marking = false;
+
+async function markAt(clientX: number, clientY: number): Promise<void> {
+  const renderer = globalThis.voxler.renderer;
+  if (!renderer) {
+    hud.flash("mark: no renderer");
+    return;
+  }
+  const rect = canvas.getBoundingClientRect();
+  if (rect.width <= 0 || rect.height <= 0) return;
+  const u = (clientX - rect.left) / rect.width;
+  const v = (clientY - rect.top) / rect.height;
+  // Loud on purpose, at every step: a mark that quietly does nothing is worse than no
+  // mark at all, because the answer to "did it work" is then another round of guessing.
+  console.log(`mark: probing ${Math.round(u * canvas.width)},${Math.round(v * canvas.height)}`);
+  hud.flash("marking...");
+  try {
+    await markNow(u, v);
+  } catch (err) {
+    const what = err instanceof Error ? err.message : String(err);
+    console.error("mark failed", err);
+    hud.flash(`mark failed: ${what}`);
+  }
+}
+
+// The probes run on the GPU and are awaited; a device that has gone away never answers,
+// and waiting for it forever is how a click looks like nothing happening.
+function withTimeout<T>(work: Promise<T>, ms: number, what: string): Promise<T> {
+  return Promise.race([
+    work,
+    new Promise<T>((_, reject) => setTimeout(() => reject(new Error(`${what} timed out after ${ms} ms`)), ms)),
+  ]);
+}
+
+async function markNow(u: number, v: number): Promise<void> {
+  const renderer = globalThis.voxler.renderer;
+  if (!renderer) return;
+  const mark = await withTimeout(collectMark({
+    far: renderer.far,
+    store,
+    ndc: [u * 2 - 1, 1 - v * 2],
+    pixel: [Math.round(u * canvas.width), Math.round(v * canvas.height)],
+    canvas: [canvas.width, canvas.height],
+    camera: {
+      position: [camera.worldPosition(0), camera.worldPosition(1), camera.worldPosition(2)],
+      yaw: camera.yaw,
+      pitch: camera.pitch,
+      fovY: camera.fovY,
+    },
+    world: { name: world.name, seed: world.seed },
+    context: {
+      search: location.search,
+      far: renderer.far.stats,
+      clipmap: {
+        levels: renderer.far.map.levels,
+        size: renderer.far.map.options.size,
+        firstLevel: renderer.far.map.options.firstLevel,
+        bricks: renderer.far.map.options.bricks,
+      },
+      stream: streamer?.stats ?? null,
+      near: renderer.near.stats,
+      switches: { meshes: view.meshes, far: renderer.showFar, preview: view.preview, grid: view.grid },
+    },
+  }), 5000, "the mark probe");
+  if (mark === null) {
+    console.warn("mark: the far field has no probe (is it switched off?)");
+    hud.flash("mark: nothing to probe with (far field off?)");
+    return;
+  }
+  const where = await saveMark(mark);
+  console.log(`mark: ${where}`);
+  hud.flash(`marked: ${where}`);
 }
 
 // How far a click reaches for a bird, in voxels. Past the flock's own box there is
@@ -1134,6 +1237,27 @@ const hud = new Hud(document.body, [
     title: "Follow the bird a click picked out, or if none, fly along whatever is under the camera (K)",
     on: () => following || chasing,
     press: toggleFollow,
+  },
+  {
+    label: "mark",
+    title: "Click something that looks wrong and the engine writes down what it is (marks/)",
+    on: () => marking,
+    press: () => {
+      marking = !marking;
+      if (!marking) {
+        hud.flash("");
+        return;
+      }
+      // The probes are compiled the first time marking is switched on: they inline the
+      // march and the world program again, which is seconds on a heavy world, and it is
+      // better spent here than on the click or on every startup.
+      const far = globalThis.voxler.renderer?.far;
+      if (!far) return;
+      hud.flash("getting ready to mark...", 60000);
+      void far.warmProbes().then(() => {
+        if (marking) hud.flash("click what looks wrong");
+      });
+    },
   },
   { label: "stats", title: "Debug overlay (F2)", on: () => overlay.visible, press: () => overlay.toggle() },
 ] satisfies HudButton[], describeCounts);

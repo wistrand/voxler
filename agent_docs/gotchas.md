@@ -271,6 +271,57 @@ disproved, drop the marker or correct the entry. Append new traps as they are hi
   every level boundary, clearest over flat water. Start the walk from the face the ray
   actually crossed. Read the pixels along a column and compare against a debug view
   that colors by level rather than guessing from a screenshot.
+- **A slab that comes back after the window moved lands on the wrong bricks.** The
+  clipmap's windows are camera-centred and addressed toroidally, so a brick's grid cell
+  never moves, but *which* brick sits at `u, v` of a slab moves every time the window
+  scrolls along one of the other two axes. A build takes several frames to come back, and
+  `applyReport` recomputed the slab's cells from the level's origin as it was *then*: any
+  scroll in the meantime shifted the CPU's shadow of the indirection off what the GPU had
+  written. The shadow is what frees pool slots, so slots went back to the pool while the
+  GPU was still pointing at them, and the next brick built into that slot appeared
+  wherever the stale pointer was: a block of another place's ground standing in mid-air,
+  a few hundred voxels out, coming and going with the camera. Found by marking six of
+  them (the `mark` switch): every one was a solid `stone` cell where the world's own SDF
+  said +7 to +28 voxels of open air, and `stone` is what the world returns below the
+  soil, which is to say from inside a hill somewhere else. Anything that comes back from
+  the GPU frames later has to be addressed by what it was built with, not by what the
+  window holds now (`slabCellAt` in src/far/clipmap.ts, and the test in
+  src/far/clipmap_test.ts).
+- **A loop with the world program in it is not a loop to the compiler.** The marked-point
+  probe started as one invocation looping over samples, asking `world_sdf` and
+  `world_material` at two footprints inside the loop: four call sites. The forest's world
+  program is large enough that inlining it four times took the far field's pipelines from
+  185 ms to compile to 66.8 seconds, and the page sat on "compiling far" for over a
+  minute. Rewritten as one sample and one footprint per invocation, a single call site
+  each like `build_slab` has, it is back to ordinary. Count call sites of a world program,
+  not lines: each one is the whole world again. The probes are also compiled only when
+  marking is switched on, because even one extra copy of the march and the world program
+  is seconds that nobody who never marks should wait through.
+- **What that cell is made of, and where it is.** A far-field cell's colour has lighting,
+  block light and fog in it by the time it reaches the screen, so reading an artefact off
+  a shaded screenshot is guesswork: a dark cell can be a dark block, a face pointing away
+  from the light, or a hole showing something behind. `?far=blocks` writes the hit's block
+  id into the red channel and `?far=height` its world height, both unshaded, so a capture
+  answers the question exactly. That is how the dark blocks on the forest's mountains were
+  split into two different things: bare rock below the snow line, which is what the world
+  says, and a scatter of rock *above* it, which is steep ground where the world's own
+  "dirt over stone" rule reads a face deeper than its soil is thick. Take the two captures
+  in one sitting at a still camera and cross-reference them per pixel.
+- **A level boundary the camera looks up at is a line of black cells.** The same
+  boundary, the other half of the same bug. Starting the cell walk from the face the ray
+  crossed fixes every brick after the first; the *first* brick of a level had no crossed
+  face to report, because what the ray crossed was the level's window, a box around the
+  camera and not a surface. It was given the Y face as a stand-in, and the shading takes
+  a face to mean `n[axis] = -sign(dir[axis])`, so every ray that was climbing got a
+  normal pointing *down*: no sun, almost no sky, black. Over the forest's mountains at
+  night that is a row of black dashes marching down the ridge, and where a whole brick
+  was solid, a black box the size of the brick (888 pixels in one blob). Fixed by saying
+  no face was crossed (`FACE_NONE`) and taking the normal from the cells around the hit
+  instead (`entry_normal` in `src/far/far.wgsl`), a step's cap from the occupancy
+  gradient and its riser from the ray. Over the seam's 6,360 pixels: mean luminance 51.6
+  against 63.2 for the far field around it, with 1,691 pixels under 20, became 71.6
+  against 65.0 with none. A face is a direction only where a face was crossed; entering
+  something is not crossing it.
 
 - **Float32 precision.** At a coordinate of about one million, f32 spacing is about
   0.06, enough to make geometry jitter. All GPU positions are camera-relative
@@ -285,6 +336,15 @@ disproved, drop the marker or correct the entry. Append new traps as they are hi
   culls geometry that just became visible during fast turns. The two-phase scheme in
   [plan-rendering.md](plan-rendering.md) exists to prevent this; don't simplify it
   to one phase.
+- **A cull check that runs after the birds compares two different pictures.**
+  `?cullCheck` draws the near field again with nothing culled and counts the pixels where
+  the depth differs, so it has to be encoded while the frame's depth still holds the near
+  field and nothing else. It was encoded after the bird pass, which writes depth of its
+  own, so in the forest every check failed, by 3,000 to 160,000 pixels, and reported a
+  cull bug that was not there. `?birds=0` gave 0 to 3 pixels over the same flight. Fixed
+  by encoding the check right after the near field's phase B pass. A correctness check
+  that fails always is worse than none: it is read as noise, and the one time it is real
+  nobody looks.
 
 - **`smoothstep` with equal ends is a WGSL compile error.** `smoothstep(a, a, x)` where
   both ends are the same constant fails at `createShaderModule`, not at run time, and a

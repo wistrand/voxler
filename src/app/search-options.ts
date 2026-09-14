@@ -63,7 +63,10 @@ function farOf(params: URLSearchParams): VoxlerOptions["far"] {
     // while the camera is still, so `?farAdapt=1` and nothing else turns it on.
     adapt: params.get("farAdapt") === "1",
     shadows: flag(params, "shadow"),
-    debug: mode === "steps" || mode === "bricks" || mode === "levels" ? mode : undefined,
+    debug: mode === "steps" || mode === "bricks" || mode === "levels" || mode === "blocks" ||
+        mode === "height"
+      ? mode
+      : undefined,
   };
 }
 

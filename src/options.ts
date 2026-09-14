@@ -87,7 +87,7 @@ export interface FarOptions {
   readonly adapt?: boolean;
   readonly shadows?: boolean;
   // "on" draws it; the rest are debug views, and "off" is the same as `far: false`.
-  readonly debug?: "steps" | "bricks" | "levels";
+  readonly debug?: "steps" | "bricks" | "levels" | "blocks" | "height";
 }
 
 export interface RenderOptions {

@@ -7,12 +7,17 @@
 // secure context, so any HOST other than loopback needs TLS to be useful.
 //
 // With --dev, POST /__bench/results saves a benchmark result (JSON from the page's
-// `?bench=` runner) to bench/results/<scene>.<UTC timestamp>.<browser>.json.
+// `?bench=` runner) to bench/results/<scene>.<UTC timestamp>.<browser>.json, and POST
+// /__mark/save saves a mark (the `mark` switch, src/debug/mark.ts) to
+// marks/<UTC timestamp>.json. Both are the dev server's alone; the published bundle has
+// neither request compiled into it.
 
 const DEV = Deno.args.includes("--dev");
 const DIST = new URL("./dist/", import.meta.url);
 const BENCH_RESULTS = new URL("./bench/results/", import.meta.url);
 const BENCH_ROUTE = "/__bench/results";
+const MARKS = new URL("./marks/", import.meta.url);
+const MARK_ROUTE = "/__mark/save";
 const MAX_BENCH_BYTES = 1 << 20;
 const SCENE_NAME = /^[a-z0-9-]{1,40}$/;
 const HOSTNAME = Deno.env.get("HOST") ?? "127.0.0.1";
@@ -85,9 +90,44 @@ async function saveBenchResult(req: Request): Promise<Response> {
   return json(200, { path: `bench/results/${name}` });
 }
 
+// Writes one mark. Nothing from the request reaches the path: the name is a timestamp.
+async function saveMark(req: Request): Promise<Response> {
+  const text = await req.text();
+  if (text.length > MAX_BENCH_BYTES) return json(413, { error: "mark too large" });
+  let data: unknown;
+  try {
+    data = JSON.parse(text);
+  } catch {
+    return json(400, { error: "not JSON" });
+  }
+  if (typeof data !== "object" || data === null) return json(400, { error: "not an object" });
+  const stamp = new Date().toISOString().replace(/[-:]/g, "").replace(/\.\d+Z$/, "Z");
+  await Deno.mkdir(MARKS, { recursive: true });
+  // A timestamp is to the second and marks come in bursts, so take the next free suffix
+  // rather than let the second one land on the first.
+  let name = `${stamp}.json`;
+  for (let n = 2; n < 1000; n++) {
+    try {
+      await Deno.lstat(new URL(name, MARKS));
+    } catch {
+      break;
+    }
+    name = `${stamp}-${n}.json`;
+  }
+  const file = new URL(name, MARKS);
+  await Deno.writeTextFile(file, JSON.stringify(data, null, 2) + "\n");
+  // The whole path, not the relative one: this line is here to be copied out of the
+  // terminal and opened, and `marks/…` is only useful if you are already in the repo.
+  console.log(`mark saved: ${file.pathname}`);
+  return json(200, { path: `marks/${name}` });
+}
+
 async function handle(req: Request): Promise<Response> {
   if (DEV && req.method === "POST" && new URL(req.url).pathname === BENCH_ROUTE) {
     return await saveBenchResult(req);
+  }
+  if (DEV && req.method === "POST" && new URL(req.url).pathname === MARK_ROUTE) {
+    return await saveMark(req);
   }
   if (req.method !== "GET" && req.method !== "HEAD") return plain(405, "method not allowed");
 

@@ -10,7 +10,7 @@ function assertEquals(got: number, want: number, what = ""): void {
 }
 
 const OPTIONS = { size: 8, levels: 3, firstLevel: 1, bricks: 4096 };
-const slab = (): Slab => ({ level: 0, axis: 0, plane: 0 });
+const slab = (): Slab => ({ level: 0, axis: 0, plane: 0, u0: 0, v0: 0 });
 
 // Builds every queued slab: takes it, pretends the GPU filled `fill` of its bricks,
 // and reports back. Returns how many slabs were built.
@@ -40,12 +40,14 @@ function drain(map: Clipmap, fill: (level: number, bx: number, by: number, bz: n
   return built;
 }
 
-function brickOf(map: Clipmap, s: Slab, u: number, v: number): [number, number, number] {
+// The bricks a slab covers, against the origin it was taken with: that is what the GPU
+// samples, and it does not change while the build is in flight.
+function brickOf(_map: Clipmap, s: Slab, u: number, v: number): [number, number, number] {
   const other = [[1, 2], [0, 2], [0, 1]][s.axis];
   const b: [number, number, number] = [0, 0, 0];
   b[s.axis] = s.plane;
-  b[other[0]] = map.origins[s.level * 3 + other[0]] + u;
-  b[other[1]] = map.origins[s.level * 3 + other[1]] + v;
+  b[other[0]] = s.u0 + u;
+  b[other[1]] = s.v0 + v;
   return b;
 }
 
@@ -243,4 +245,46 @@ Deno.test("the level count follows the reach the fog leaves", () => {
   assertEquals(levelsForReach(32, 1, Infinity, 8), 8);
   // Wider levels reach the same distance in fewer of them.
   assertEquals(levelsForReach(64, 1, 15134, 8), 6);
+});
+
+Deno.test("a slab that comes back after the window moved lands on the bricks it was built from", () => {
+  // A build takes several frames to come back. If the window scrolls along one of the
+  // other two axes in the meantime, the plane still exists but covers different bricks,
+  // and the report has to land on the ones the GPU actually sampled. Getting this wrong
+  // frees pool slots the GPU is still pointing at, and what that looks like is a block of
+  // another place's ground standing in mid-air (gotchas.md).
+  const map = new Clipmap(OPTIONS);
+  map.update(0, 0, 0);
+  const size = OPTIONS.size;
+  const s = slab();
+  // Build everything the first update queued, then scroll one brick along x, which
+  // queues a slab of the x plane that scrolled in.
+  drain(map, () => true);
+  map.update(map.brickVoxels(0), 0, 0);
+  assert(map.take(s), "scrolling a brick queued nothing");
+  const level = s.level, axis = s.axis, plane = s.plane;
+  const bricks: [number, number, number][] = [];
+  for (let v = 0; v < size; v++) for (let u = 0; u < size; u++) bricks.push(brickOf(map, s, u, v));
+
+  // The window scrolls again, along another axis, while the slab is in flight.
+  map.update(map.brickVoxels(0), 0, map.brickVoxels(0) * 2);
+
+  const slots = new Uint32Array(size * size);
+  const n = map.pool.take(slots, 0, size * size);
+  const entries = new Uint32Array(size * size);
+  for (let i = 0; i < size * size; i++) entries[i] = slots[i] + 1;
+  map.applyReport(s, entries, 0);
+  void n;
+
+  // Every entry sits in the cell of the brick it was built from, whatever the origin is
+  // now. The cells are toroidal, so this is the only thing that ties the two together.
+  for (let i = 0; i < size * size; i++) {
+    const [bx, by, bz] = bricks[i];
+    const cell = map.cellOf(level, bx, by, bz);
+    assertEquals(
+      map.entries[cell],
+      entries[i],
+      `brick ${bx},${by},${bz} of the slab on axis ${axis} plane ${plane}`,
+    );
+  }
 });
