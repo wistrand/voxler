@@ -1,4 +1,4 @@
-// Bloom over the glowing blocks (`?bloom=1`, off by default). Owns the emission source
+// Bloom over the glowing blocks (`?bloom=1`; the forest has it on). Owns the emission source
 // the near field draws into as its second colour attachment, the chain of half-size
 // targets the blur runs down and back up, and the composite onto the frame. Shaders in
 // bloom.wgsl; the design and what it costs are in plan-living-world.md "Bloom".

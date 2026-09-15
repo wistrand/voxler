@@ -36,7 +36,7 @@ sampled bricks against the chunk reduction, and F queues every level again.
 
 The march costs 1.2 to 1.7 ms p50 over the flyover bench at 1080p and 1.0 over the grove
 (2026-09-15, "An axes word per brick" under phase 5), with the beam pre-pass at 0.066 and
-slab sampling at 0.5. It is on by default; the level count is trimmed to the world's fog
+slab sampling at 0.59 (`flyover.20260915T101146Z`). It is on by default; the level count is trimmed to the world's fog
 horizon at startup, and the adaptive controller (`?farAdapt=1`) can move it further, off
 by default because what it moves is visible while the camera is still.
 

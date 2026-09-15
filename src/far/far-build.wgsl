@@ -44,7 +44,7 @@ struct FarColors {
 // Per ring slot: [0] the slot cursor, [1 .. 1+B^2] free slots the CPU offered,
 // [1+B^2 .. 1+2*B^2] what this build did with them, copied back.
 @group(0) @binding(7) var<storage, read_write> slab: array<atomic<u32>>;
-// The marked-point world probe, in step with src/debug/mark.ts.
+// The marked-point world probe, in step with src/far/probe.ts.
 const WORLD_PROBE_SAMPLES = 24u;
 // Two threads a sample: one asks at a voxel's footprint, the other at the cell's.
 const WORLD_PROBE_THREADS = 48u;
@@ -142,7 +142,7 @@ fn clear_slab(@builtin(global_invocation_id) gid: vec3u) {
 // remembers. The `mark` switch takes one of these through the cell a click landed on, so
 // "should this be here" is answered by the world itself (src/debug/mark.ts). Brushes are
 // not folded in: this is the world's own answer, and a brush is on the record already.
-// The word layout is owned by src/debug/mark.ts and checked by src/debug/mark_test.ts.
+// The word layout is owned by src/far/probe.ts and checked by src/far/probe_test.ts.
 @group(1) @binding(0) var<storage, read_write> world_probe: array<u32, WORLD_PROBE_WORDS>;
 
 // One point at one footprint per invocation, and no loop: `world_sdf` and

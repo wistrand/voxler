@@ -301,9 +301,12 @@ export class FlyControls {
       if (this.touches >= 2) {
         // The second finger ends the look and starts the two-finger gesture: turning and
         // flying at once cannot be aimed, and the finger that was looking is now half of
-        // the stick.
-        this.endLook();
-        this.beginGesture();
+        // the stick. A third joins the count and nothing else: restarting the gesture
+        // would snap the stick back to centre under a resting palm.
+        if (this.touches === 2) {
+          this.endLook();
+          this.beginGesture();
+        }
         e.preventDefault();
         return;
       }
@@ -385,9 +388,11 @@ export class FlyControls {
     return -1;
   }
 
+  // Ends the look without giving the pointer back: a captured finger keeps reporting to
+  // the canvas after it has slid off it, and a finger that stops reporting stays counted
+  // as down, which leaves the stick pushed and every click after it swallowed as part of
+  // a gesture that has ended.
   private endLook(): void {
-    if (this.dragId === -1) return;
-    if (this.canvas.hasPointerCapture(this.dragId)) this.canvas.releasePointerCapture(this.dragId);
     this.dragId = -1;
   }
 

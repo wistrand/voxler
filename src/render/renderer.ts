@@ -100,7 +100,8 @@ export interface RendererOptions {
   voxelSlots: number;
   // Bloom over the glowing blocks (`?bloom=1`): the near field writes its fogged
   // emission to a second attachment and src/render/bloom.ts blurs it over the frame.
-  // Off by default, and a startup choice: it is baked into the near pipeline's targets.
+  // Off unless the world or the host asks (the forest does), and a startup choice: it is
+  // baked into the near pipeline's targets.
   bloom?: boolean;
   recycle: (buffer: ArrayBuffer) => void; // returns mesh buffers to the worker pool
   near: NearFieldOptions;
@@ -861,7 +862,9 @@ export class Renderer {
     }
     // Bloom last of all: it screens the blurred glow over everything drawn, water over a
     // jelly included, and the HUD is DOM and never part of the frame.
-    if (this.bloom !== null && meshes) {
+    // `ready` gates the timestamp as well as the pass: a stamp handed to a pass that is
+    // not encoded reads back whatever the query held (the convention in CLAUDE.md).
+    if (this.bloom !== null && this.bloom.ready && meshes) {
       this.bloom.encode(encoder, target, this.timer.passWrites(PASS_BLOOM));
       counters.draws++;
     }

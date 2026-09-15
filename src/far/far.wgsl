@@ -113,7 +113,7 @@ const DEBUG_LEVELS: u32 = 3u;
 const DEBUG_BLOCK: u32 = 4u;
 const DEBUG_HEIGHT: u32 = 5u;
 
-// Words in the marked-ray probe buffer, in step with src/debug/mark.ts.
+// Words in the marked-ray probe buffer, in step with src/far/probe.ts.
 const PROBE_WORDS = 24u;
 
 // March pixels per beam tile, in step with src/far/far-field.ts.
@@ -557,7 +557,7 @@ fn beam_far(@builtin(global_invocation_id) gid: vec3u) {
 // back when someone clicks on something that looks wrong (src/debug/mark.ts). Its own
 // entry point rather than another debug view, because a debug view is a colour to read
 // off a screenshot and this is the numbers themselves. The word layout is owned by
-// src/debug/mark.ts and checked by src/debug/mark_test.ts.
+// src/far/probe.ts and checked by src/far/probe_test.ts.
 @group(1) @binding(0) var<storage, read_write> probe: array<u32, PROBE_WORDS>;
 
 @compute @workgroup_size(1)

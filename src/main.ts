@@ -107,7 +107,7 @@ const CONTROLS_HELP = "drag: look (mouse or touch)  WASD move  Space/C up/down  
   "?clusterOrder=morton  ?nearMB=n quad arena  ?ao=0 no baked AO  ?tex=0 no textures\n" +
   "?glow=0 no emission  ?wind=0 no sway  ?light=0 no block light  ?shadow=0 no shadows\n" +
   `?sky=${Object.keys(SKIES).join("|")} overrides the world's own sky\n` +
-  "?far=0 no far field  ?far=steps|bricks|levels debug view (F rebuilds it)  ?farScale=0.1..1\n" +
+  "?far=0 no far field  ?far=steps|bricks|levels|blocks|height debug view (F rebuilds it)  ?farScale=0.1..1\n" +
   "?birds=0 no birds (the forest has them)  ?bloom=0 no glow bloom (the forest has it)  ?gizmo=0 no axis cross\n" +
   "?farLevels=n ?farSize=n ?farFirst=k ?farBricks=n ?farSlabs=n ?farBeam=0  ?farAdapt=0  ?farCheck\n" +
   `?bench=${Object.keys(SCENES).join("|")}&runs=n benchmark`;
@@ -318,7 +318,7 @@ const farBeam = opts.far.beam;
 // imperceptible before it can be the default, and this one is not yet: over a minute
 // standing in one place it walked terrain from eight levels to five.
 const farAdapt = opts.far.adapt;
-// `?far=steps|bricks|levels` picks a debug view; F rebuilds its bricks around the camera.
+// `?far=steps|bricks|levels|blocks|height` picks a debug view; F rebuilds its bricks around the camera.
 const farMode = opts.far.debug;
 const farOn = opts.farOn;
 const nearOptions: NearFieldOptions = {
@@ -870,11 +870,20 @@ try {
 // A click on the canvas, alongside the camera's own drag handling: the controls capture
 // the pointer for looking, which does not stop a second listener on the same element.
 canvas.addEventListener("pointerdown", (e) => {
+  pointersDown++;
+  // A second pointer landing is a gesture, not a click, whichever of the two lifts
+  // first and however still it was held. Asking the controls at pointerup is too late:
+  // their handler runs first and has already counted the finger off.
+  if (pointersDown > 1) {
+    clickId = -1;
+    return;
+  }
   clickId = e.pointerId;
   clickX = e.clientX;
   clickY = e.clientY;
 });
 canvas.addEventListener("pointerup", (e) => {
+  pointersDown = Math.max(0, pointersDown - 1);
   if (e.pointerId !== clickId) return;
   clickId = -1;
   if (Math.hypot(e.clientX - clickX, e.clientY - clickY) > CLICK_SLOP_PX) return;
@@ -886,6 +895,7 @@ canvas.addEventListener("pointerup", (e) => {
   else void pickBirdAt(e.clientX, e.clientY);
 });
 canvas.addEventListener("pointercancel", () => {
+  pointersDown = Math.max(0, pointersDown - 1);
   clickId = -1;
 });
 
@@ -1078,6 +1088,7 @@ globalThis.voxler.mark = (u = 0.5, v = 0.5) => {
 // frames later, by which time the birds have moved about half a voxel.
 const CLICK_SLOP_PX = 5;
 let clickId = -1;
+let pointersDown = 0; // pointers on the canvas; two or more is a gesture, never a click
 let clickX = 0;
 let clickY = 0;
 
