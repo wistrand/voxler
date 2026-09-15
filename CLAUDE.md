@@ -73,7 +73,8 @@ far field off turns shadows off with it.
 The living world is done: emissive blocks, wind in the vertex stage, the forest world
 program, block light flood filled in the mesh job and baked per quad corner, per-world
 sky and lighting presets (`src/render/sky.ts`) including a night with a moon, and
-shadows marched against the far field's clipmap. The forest has grown since: four tree
+shadows marched against the far field's clipmap, and bloom over the glowing blocks where
+a world asks for it (the forest does; `src/render/bloom.ts`). The forest has grown since: four tree
 species over three leaf greens, mountains with a rock band and snow on top, undergrowth
 that climbs past the tree line as alpine scrub, ferns thickest down at the waterline,
 waterfalls where a gorge and a steep step agree, jellyfish in the water, and birds over
@@ -87,7 +88,8 @@ field's clipmap what is under them, which is the same occupancy the shadow rays 
 `?far=0` takes that away with the shadows. Clicking one picks it out (amber, and a line in
 the on-screen panel); clicking nothing clears it; and with one picked, the follow switch
 chases it instead of the ground.
-A world opts in with `birds` in `src/worlds/index.ts` and pays one more pipeline and two
+A world opts in with `birds` in `src/worlds/index.ts` (and into bloom with `bloom`, the
+same way) and pays one more pipeline and two
 more passes for it; the passes cost under the GPU timer's resolution. What those cost to get
 right is in [plan-living-world.md](agent_docs/plan-living-world.md), and most of it was
 about scatter and rarity rather than about shapes.
@@ -144,13 +146,14 @@ today `src/gpu/`, `src/render/`, `src/camera/`, `src/util/`, `src/debug/`,
 | `src/worlds/`    | world programs (`<name>.wgsl`, selected with `?world=`)        |
 | `src/brush/`     | brush records and op lists, the CPU and WGSL field folds, the voxel stage, the instance store, the edit tool |
 | `src/mesh/`      | binary greedy mesher, reference mesher, clusters, baked AO and block light, mesh job (worker-side, pure) |
-| `src/render/`    | arenas, cull and draw passes, Hi-Z, shading, sky presets, block textures, the bird flock |
-| `src/far/`       | brick builder, clipmaps, far-field march and composite, shadow rays, the adaptive reach |
+| `src/render/`    | arenas, cull and draw passes, Hi-Z, shading, sky presets, block textures, the bird flock, bloom |
+| `src/far/`       | brick builder, clipmaps, far-field march and composite, shadow rays, the adaptive reach, the mark probes (`probe.ts`) |
 | `src/workers/`   | `WorkerPool`, job queue, buffer pool, the worker, job handlers |
 | `src/util/`      | math, ring buffers, timers                                     |
-| `src/debug/`     | the debug overlay (caps, stats, camera, errors), the on-screen panel (frame rate, switches, what the world is holding, compile progress) and frame `Stats` |
+| `src/debug/`     | the debug overlay (caps, stats, camera, errors), the on-screen panel (frame rate, switches, what the world is holding, compile progress), frame `Stats`, and marking (`mark.ts`: what the engine knows about a clicked pixel, posted to the dev server) |
 | `src/bench/`     | benchmark scenes, runner, session; tracked, and `/bench/` in `.gitignore` is anchored so it stays that way ([gotchas.md](agent_docs/gotchas.md) "A gitignore pattern without a leading slash") |
 | `bench/results/` | dated benchmark result files (generated, gitignored, local to a machine) |
+| `marks/`         | what the panel's `mark` switch posts back, one JSON per click (generated, gitignored, written by `serve.ts --dev`) |
 | `index.html`     | page shell, copied to `dist/` by the build; owns the canvas layout, including the letterbox a fixed `?size=` is fitted into |
 | `build.ts`       | esbuild bundling (`buildRelease()`, `watch()`)                 |
 | `serve.ts`       | static server for `dist/` with COOP/COEP headers; `--dev` also watches, rebuilds and answers the benchmark save route |
@@ -258,7 +261,11 @@ emission, `?wind=0` holds swaying blocks still, `?light=0` meshes and draws with
 light and `?shadow=0` stops marching shadow rays; `?sky=<day|night|desert|space>` overrides the
 world's own sky and lighting preset (`src/render/sky.ts`); `?birds=0` turns the bird flock off in a world
 that has one; `?gizmo=0` starts without the axis cross in the corner, which is what a
-screenshot wants; `?far=0` turns the far
+screenshot wants; `?bloom=1` and `?bloom=0` bloom the glowing blocks or not (the world's
+own default otherwise, `bloom` in `src/worlds/index.ts`: on in the forest, off elsewhere.
+The near pass writes its fogged emission to a second attachment and `src/render/bloom.ts`
+blurs it over the frame with a screen blend, which cannot clip; a startup choice, because
+the pipeline's targets are built with it, so the panel's switch reloads); `?far=0` turns the far
 field off (it is on by default) and `?far=steps|bricks|levels|blocks|height` picks a debug
 view (F queues every clipmap level again). `blocks` writes the hit's block id into the red
 channel and `height` its world height as `(y + 512) / 1024`, so a screenshot of either is
@@ -287,11 +294,11 @@ they have moved from where they landed is a stick that flies while it is held (u
 screen is forward, across is a strafe) and the deflection is analog, and spreading or
 closing them is the wheel. The second finger landing ends the look, because a gesture
 that turns and flies at once cannot be aimed. On-screen: a small panel top right with the frame rate, the switches worth reaching for
-(sky, far field, shadows, meshes, SDF preview, chunk grid, the axis cross, the follow
-flyover, marking, the debug overlay), a line of what the world is currently holding (resident chunks and the voxels
+(sky, far field, shadows, bloom, meshes, SDF preview, chunk grid, the axis cross, the
+follow flyover, marking, the debug overlay), a line of what the world is currently holding (resident chunks and the voxels
 they stand for, quads, clusters drawn against clusters live, far-field bricks) and, while
 a world is still compiling its pipelines, which stages are outstanding. The counts are
-built on the panel's own quarter-second tick, never in the frame path. The switches that are compiled into the shaders (the sky and shadows) reload
+built on the panel's own quarter-second tick, never in the frame path. The switches that are compiled into the shaders (the sky, shadows and bloom) reload
 the page carrying the camera in `?at=`; the rest flip on the running renderer.
 Click a bird to pick it out, and anywhere else to clear it; a drag is a look, not a click.
 Keys:
@@ -349,7 +356,15 @@ the dev build's alone. `build.ts` defines `__BENCH_SAVE__` false for a release b
 the POST in `src/bench/save.ts` is compiled out and the published bundle carries no
 request to post back with: the overlay says `not saved` and the JSON stays in the console.
 A run off the published site is not comparable to anything here anyway, because that page
-cannot be cross-origin isolated and its workers are on the copy path.
+cannot be cross-origin isolated and its workers are on the copy path. What that path costs
+was measured once, the same dev bundle served with and without the headers over the same
+flyover (2026-09-15, `flyover.20260915T101146Z` isolated against `flyover.20260915T101206Z`
+served by `docs-serve.ts`, the second written by hand from the console because that server
+has no save route): the GPU passes and the mesh work are identical (2,270 meshes from 8,490
+jobs in both), CPU frame p50 is unchanged at 1.8 to 1.9 ms, and the tail is where the
+copying lands, p95 4.8 to 6.5 and p99 5.2 to 7.4 ms, with a mesh job's round trip 2.8 to
+5.7 ms. Not isolated, `performance.now()` is also coarsened to 0.1 ms, so every CPU
+figure from such a run is quantised to that.
 
 ## Docs
 
@@ -404,7 +419,8 @@ cannot be cross-origin isolated and its workers are on the copy path.
   missing one reader is silent, so each such format has a test that reads the shaders and
   checks the arithmetic: `src/world/block-table_test.ts` for the block table's four
   readers, `src/far/brick-layout_test.ts` for the brick and clipmap layout's three
-  (`far.wgsl`, `shadow.wgsl`, `far-build.wgsl`), `src/render/birds_test.ts` for the bird
+  (`far.wgsl`, `shadow.wgsl`, `far-build.wgsl`; the axes word included),
+  `src/far/probe_test.ts` for the mark probes' two buffers, `src/render/birds_test.ts` for the bird
   state buffer's three plus the `renderer.ts` that sizes them. Add the reader to the test
   in the same change that adds the reader.
 - Baked per-corner values (AO, block light) join the mesher's merge key. Adding one

@@ -31,6 +31,7 @@ import type { WorldProgram } from "../worlds/index.ts";
 import { CAMERA_UNIFORM_SIZE, CameraUniform } from "./camera-uniform.ts";
 import { runDrawTest } from "./draw-test.ts";
 import { NearField, type NearFieldOptions } from "./near-field.ts";
+import { Bloom } from "./bloom.ts";
 
 const DEPTH_FORMAT: GPUTextureFormat = "depth32float";
 const GRID_RADIUS = 8; // chunks each side of the camera chunk
@@ -69,6 +70,7 @@ const PASS_NEAR_T = 10;
 const PASS_FAR = 11;
 const PASS_FAR_BUILD = 12;
 const PASS_FAR_BEAM = 13;
+const PASS_BLOOM = 14;
 // Three boxes to a bird (a body and two wings), 36 vertices to a box. The flock's shape
 // is in `src/render/birds.ts`, beside the picker that needs the same numbers.
 const BIRD_INSTANCES = BIRDS * 3;
@@ -90,11 +92,16 @@ const TIMED_PASSES = [
   "far",
   "far.build",
   "far.beam",
+  "bloom",
 ] as const;
 
 export interface RendererOptions {
   previewScale: number;
   voxelSlots: number;
+  // Bloom over the glowing blocks (`?bloom=1`): the near field writes its fogged
+  // emission to a second attachment and src/render/bloom.ts blurs it over the frame.
+  // Off by default, and a startup choice: it is baked into the near pipeline's targets.
+  bloom?: boolean;
   recycle: (buffer: ArrayBuffer) => void; // returns mesh buffers to the worker pool
   near: NearFieldOptions;
   far: FarFieldOptions;
@@ -168,6 +175,8 @@ export class Renderer {
   readonly preview: SdfPreview;
   // Far field (plan-far-field phases 1-2). Off until the page builds its bricks.
   readonly far: FarField;
+  // Null unless the renderer was built with `bloom`.
+  readonly bloom: Bloom | null;
   showFar = false;
   private readonly cameraUniform: CameraUniform;
   private readonly frameLayout: GPUBindGroupLayout;
@@ -326,9 +335,10 @@ export class Renderer {
       depthLoadOp: "clear",
       depthStoreOp: "store",
     };
+    this.bloom = options.bloom ? new Bloom(device) : null;
     this.nearDescriptor = {
       label: "near a",
-      colorAttachments: [this.nearColor],
+      colorAttachments: this.bloom ? [this.nearColor, this.bloom.sourceClear] : [this.nearColor],
       depthStencilAttachment: this.nearDepth,
     };
     this.nearBColor = { view: undefined as unknown as GPUTextureView, loadOp: "load", storeOp: "store" };
@@ -341,7 +351,7 @@ export class Renderer {
     };
     this.nearBDescriptor = {
       label: "near b",
-      colorAttachments: [this.nearBColor],
+      colorAttachments: this.bloom ? [this.nearBColor, this.bloom.sourceLoad] : [this.nearBColor],
       depthStencilAttachment: this.nearBDepth,
     };
     // Birds share the near field's colour and depth, loaded and stored, and draw whether
@@ -393,6 +403,13 @@ export class Renderer {
     this.near.setShadowSource(this.far.shadowResources());
     const nearReady = stage("near", this.near.init(CAMERA_SOURCE, this.world.sky, format, DEPTH_FORMAT, this.frameLayout, report));
     const farReady = stage("far", this.far.init(format, DEPTH_FORMAT, report));
+    // Bloom's own pipelines, when it is on. It is reported like the rest; a failure
+    // leaves the frame drawing without it rather than blank.
+    if (this.bloom !== null) {
+      void stage("bloom", this.bloom.init(format, report).then((ok) => {
+        if (!ok) report("bloom: pipelines failed to build; drawing without it");
+      }));
+    }
     const drawTestDone = stage("drawTest", runDrawTest(device, report).then((failure) => {
       this.drawTest = failure ?? "ok";
       if (failure) report(`draw builtins self-test failed: ${failure}`);
@@ -672,6 +689,7 @@ export class Renderer {
     this.nearDepth.view = this.depthAttachment.view;
     this.nearBDepth.view = this.depthAttachment.view;
     this.near.resize(width, height, this.depthTexture);
+    this.bloom?.resize(width, height);
     this.preview.resize(width, height);
     const margin = Math.round(GIZMO_MARGIN_CSS_PX * devicePixelRatio);
     this.gizmoSize = Math.max(1, Math.min(Math.round(GIZMO_CSS_PX * devicePixelRatio), width, height));
@@ -839,6 +857,12 @@ export class Renderer {
       passT.setBindGroup(0, this.frameBindGroup);
       this.near.drawTranslucent(passT);
       passT.end();
+      counters.draws++;
+    }
+    // Bloom last of all: it screens the blurred glow over everything drawn, water over a
+    // jelly included, and the HUD is DOM and never part of the frame.
+    if (this.bloom !== null && meshes) {
+      this.bloom.encode(encoder, target, this.timer.passWrites(PASS_BLOOM));
       counters.draws++;
     }
     this.timer.resolve(encoder);

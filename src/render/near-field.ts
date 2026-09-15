@@ -35,6 +35,7 @@ import "../gpu/globals.ts";
 import type { Caps } from "../gpu/caps.ts";
 import { CounterReadback } from "../gpu/counters.ts";
 import { compileShader, createRenderPipeline, type Report, type ShaderSource } from "../gpu/shader.ts";
+import { BLOOM_FORMAT } from "./bloom.ts";
 import type { MeshJobOutput } from "../mesh/job.ts";
 import { readMeshOutput } from "../mesh/output.ts";
 import { BLOCK_TABLE_FLOATS, blockColorTable, blockFaceTable, MAX_BLOCK_TYPES } from "../world/blocks.ts";
@@ -72,6 +73,10 @@ export interface NearFieldOptions {
   animated: boolean; // blow blocks with a sway amount about in the wind (?wind=0)
   blockLight: boolean; // light surfaces from nearby glowing blocks (?light=0)
   shadows: boolean; // march the far field's clipmap for shadows from the sun or moon (?shadow=0)
+  // Write the fogged emission to a second colour attachment for the bloom pass
+  // (?bloom=1). Chosen at init: it picks the fragment entry point and the pipeline's
+  // targets, and the renderer gives the near passes the attachment to match.
+  bloom: boolean;
 }
 
 export const DEFAULT_NEAR_OPTIONS: NearFieldOptions = {
@@ -84,6 +89,7 @@ export const DEFAULT_NEAR_OPTIONS: NearFieldOptions = {
   animated: true,
   blockLight: true,
   shadows: true,
+  bloom: false,
 };
 
 export interface NearFieldStats {
@@ -131,6 +137,7 @@ interface CheckTargets {
   height: number;
   color: GPUTexture;
   depth: GPUTexture;
+  glow: GPUTexture | null; // the draw pipeline's second target when bloom is on
   pass: GPURenderPassDescriptor;
 }
 
@@ -175,6 +182,8 @@ export class NearField {
   private readonly recycle: (buffer: ArrayBuffer) => void;
   private readonly clusterQuads: number;
   private readonly drawConstants: Record<string, number>;
+  // Whether the draw pipeline writes the bloom source as a second target (options.bloom).
+  private readonly bloomEnabled: boolean;
   private readonly faceBuffer: GPUBuffer;
   private readonly blockTextures: GPUTexture;
   private readonly blockSampler: GPUSampler;
@@ -264,6 +273,7 @@ export class NearField {
       BLOCK_LIT: options.blockLight ? 1 : 0,
       SHADOWS: options.shadows ? 1 : 0,
     };
+    this.bloomEnabled = options.bloom;
     const limit = Math.min(caps.limits.maxStorageBufferBindingSize, caps.limits.maxBufferSize);
     // Whole clusters of quads, so every quad slot can be used.
     const quadBytes = Math.floor(Math.min(options.quadMiB * 1048576, limit) / (cq * QUAD_BYTES)) * cq * QUAD_BYTES;
@@ -469,7 +479,12 @@ export class NearField {
         bindGroupLayouts: [frameLayout, this.drawLayout, this.shadowLayout],
       }),
       vertex: { module: drawModule, entryPoint: "vs_cluster", constants: this.drawConstants },
-      fragment: { module: drawModule, entryPoint: "fs", targets: [{ format }], constants: this.drawConstants },
+      fragment: {
+        module: drawModule,
+        entryPoint: this.bloomEnabled ? "fs_bloom" : "fs",
+        targets: this.bloomEnabled ? [{ format }, { format: BLOOM_FORMAT }] : [{ format }],
+        constants: this.drawConstants,
+      },
       primitive: { topology: "triangle-list", cullMode: "back", frontFace: "ccw" },
       depthStencil: { format: depthFormat, depthWriteEnabled: true, depthCompare: "greater" },
     }, report);
@@ -870,30 +885,39 @@ export class NearField {
     if (existing) {
       existing.color.destroy();
       existing.depth.destroy();
+      existing.glow?.destroy();
     }
     const device = this.device;
     // COPY_SRC so tests can read the reference back.
     const usage = GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_SRC;
     const color = device.createTexture({ label: "cull check color", size: [width, height], format: this.format, usage });
+    // The draw pipeline writes two targets with bloom on, so the check pass has to offer
+    // two; the second is scratch, nothing reads it.
+    const glow = this.bloomEnabled
+      ? device.createTexture({ label: "cull check glow", size: [width, height], format: BLOOM_FORMAT, usage })
+      : null;
     const depth = device.createTexture({
       label: "cull check depth",
       size: [width, height],
       format: this.depthFormat,
       usage,
     });
+    const colorAttachments: GPURenderPassColorAttachment[] = [{
+      view: color.createView(),
+      loadOp: "clear",
+      storeOp: "store",
+      clearValue: { r: 0, g: 0, b: 0, a: 1 },
+    }];
+    if (glow) colorAttachments.push({ view: glow.createView(), loadOp: "clear", storeOp: "discard" });
     this.checkTargets = {
       width,
       height,
       color,
       depth,
+      glow,
       pass: {
         label: "cull check",
-        colorAttachments: [{
-          view: color.createView(),
-          loadOp: "clear",
-          storeOp: "store",
-          clearValue: { r: 0, g: 0, b: 0, a: 1 },
-        }],
+        colorAttachments,
         depthStencilAttachment: {
           view: depth.createView(),
           depthClearValue: 0,

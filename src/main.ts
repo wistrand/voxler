@@ -108,7 +108,7 @@ const CONTROLS_HELP = "drag: look (mouse or touch)  WASD move  Space/C up/down  
   "?glow=0 no emission  ?wind=0 no sway  ?light=0 no block light  ?shadow=0 no shadows\n" +
   `?sky=${Object.keys(SKIES).join("|")} overrides the world's own sky\n` +
   "?far=0 no far field  ?far=steps|bricks|levels debug view (F rebuilds it)  ?farScale=0.1..1\n" +
-  "?birds=0 no birds (the forest has them)  ?gizmo=0 no axis cross\n" +
+  "?birds=0 no birds (the forest has them)  ?bloom=0 no glow bloom (the forest has it)  ?gizmo=0 no axis cross\n" +
   "?farLevels=n ?farSize=n ?farFirst=k ?farBricks=n ?farSlabs=n ?farBeam=0  ?farAdapt=0  ?farCheck\n" +
   `?bench=${Object.keys(SCENES).join("|")}&runs=n benchmark`;
 
@@ -331,6 +331,7 @@ const nearOptions: NearFieldOptions = {
   animated,
   blockLight,
   shadows: shadows && farOn,
+  bloom: opts.render.bloom,
 };
 const mesher = meshing ? new MeshScheduler(store, pool, { ...DEFAULT_MESH_OPTIONS, clusterQuads, clusterOrder, ao: bakedAo, blockLight }) : null;
 if (mesher) {
@@ -759,6 +760,7 @@ async function start(): Promise<void> {
 
   const renderer = new Renderer(gpu, (m) => overlay.error(m), world, {
     previewScale: opts.render.previewScale,
+    bloom: opts.render.bloom,
     voxelSlots: opts.voxelSlots,
     recycle: (buffer) => pool.recycle(buffer),
     near: nearOptions,
@@ -1231,6 +1233,13 @@ const hud = new Hud(document.body, [
   { label: "sky", title: "Day, night or desert. Reloads: the sky is compiled into the shaders", on: () => true, press: cycleSky },
   { label: "far", title: "Far field (the ray-marched distance)", on: () => globalThis.voxler.renderer?.showFar ?? false, press: toggleFar },
   { label: "shadow", title: "Shadows. Reloads: it is a shader constant", on: () => shadows, press: () => reloadWith("shadow", shadows ? "0" : null) },
+  {
+    label: "bloom",
+    title: "Bloom over the glowing blocks. Reloads: it is built into the near pass",
+    on: () => opts.render.bloom,
+    // Set either way rather than deleted when off: the world may have it on by default.
+    press: () => reloadWith("bloom", opts.render.bloom ? "0" : "1"),
+  },
   { label: "mesh", title: "Near-field meshes (M)", on: () => view.meshes, press: toggleMeshes },
   { label: "sdf", title: "SDF preview (P)", on: () => view.preview, press: togglePreview },
   { label: "grid", title: "Chunk grid (G)", on: () => view.grid, press: toggleGrid },

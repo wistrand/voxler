@@ -61,6 +61,7 @@ Deno.test("near field: random adds, replacements, removals leave exactly the liv
     clusterQuads: 32, ao: true, textured: true, emissive: true, animated: true,
     blockLight: true,
     shadows: false,
+    bloom: false,
   });
   const output = (m: number): MeshJobOutput => ({
     mesh: meshes[m].slice(0),
@@ -147,6 +148,7 @@ Deno.test("near field: two-phase culled draw matches an unculled one, pixel for 
     clusterQuads: 32, ao: true, textured: true, emissive: true, animated: true,
     blockLight: true,
     shadows: false,
+    bloom: false,
   });
   const ok = await near.init({ name: "camera.wgsl", code: cameraWgsl }, SKIES[DEFAULT_SKY], "rgba8unorm", "depth32float", frameLayout, report);
   assert(ok, `init: ${reports.join("\n")}`);
@@ -273,6 +275,7 @@ Deno.test("near field: no holes while the camera moves and turns, frame after fr
     clusterQuads: 32, ao: true, textured: true, emissive: true, animated: true,
     blockLight: true,
     shadows: false,
+    bloom: false,
   });
   assert(
     await near.init({ name: "camera.wgsl", code: cameraWgsl }, SKIES[DEFAULT_SKY], "rgba8unorm", "depth32float", frameLayout, (m) => reports.push(m)),
@@ -402,6 +405,7 @@ Deno.test({
       textured: true, emissive: true, animated: true,
     blockLight: true,
     shadows: false,
+    bloom: false,
     });
     const camera = new FlyCamera();
     const cameraUniform = new CameraUniform(device);

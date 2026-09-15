@@ -384,6 +384,7 @@ export class Voxler {
     const o = this.options;
     const renderer = new Renderer(gpu, (m) => this.error(m), this.world, {
       previewScale: o.render.previewScale,
+      bloom: o.render.bloom,
       voxelSlots: o.voxelSlots,
       recycle: (buffer) => this.pool.recycle(buffer),
       near: {
@@ -396,6 +397,7 @@ export class Voxler {
         animated: o.render.wind,
         blockLight: o.mesh.blockLight,
         shadows: o.shadows,
+        bloom: o.render.bloom,
       },
       far: { clipmap: o.far.clipmap, slabsPerFrame: o.far.slabsPerFrame, scale: o.far.scale },
     });

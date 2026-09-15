@@ -26,6 +26,7 @@
 - Voxelizer output
 - Brick and clipmap
 - Bird state
+- Probe buffers
 - Changing a format
 
 ## Coordinate spaces
@@ -620,6 +621,17 @@ and reads `birds-step.wgsl` and `birds.wgsl` to check both halves of the wing be
 keyed to the same `bird_effort()`. Same hazard as a stride copied into a shader, so the
 same kind of test as `src/far/brick-layout_test.ts`. Add a field here and that test is the
 edit that comes after the shader and the TS.
+
+## Probe buffers
+
+The `mark` switch (src/debug/mark.ts) asks the GPU two questions about a clicked pixel,
+each through a flat `array<u32>` with no struct alignment to get wrong across the
+boundary: `probe_far` in `far.wgsl` marches one ray from zero and writes what it met, and
+`probe_world` in `far-build.wgsl` asks the world program along a line of points at two
+footprints. Both layouts are owned by `src/far/probe.ts` (`RAY_WORD` names every word
+of the first; the second is a 12-word header and four words a sample), and
+`src/far/probe_test.ts` holds the two shaders to them the way `brick-layout_test.ts`
+holds the brick readers.
 
 ## Changing a format
 

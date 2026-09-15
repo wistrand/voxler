@@ -56,7 +56,8 @@ Working, and fast enough to be worth looking at. Worlds voxelize on the GPU into
 compressed chunk storage, are meshed in workers, culled and drawn as greedy quads by
 vertex pulling, and continue past the meshed radius as a ray-marched brickmap that
 reaches as far as the fog lets the eye see. Surfaces carry baked ambient occlusion and
-baked light from glowing blocks, and cast shadows from the sun or moon. Voxels can be
+baked light from glowing blocks, and cast shadows from the sun or moon; a world can ask
+for bloom over its glowing blocks, and the forest does. Voxels can be
 edited and the edits survive the chunk being regenerated. A ray-traced preview of the
 same world is one key away, though for a heavy world it takes a while to compile the
 first time.
@@ -64,7 +65,7 @@ first time.
 Four worlds ship: a showcase of the SDF primitives, a terrain world, a fantasy forest at
 night with glowing fungus, lakes, waterfalls, mountains and flocks of birds over it, and a
 desert of Monument Valley buttes. Pressing K starts a flyover that follows whatever is under the camera,
-which over a river follows the river.
+which over a river follows the river. It flies on a phone too: one finger looks, two fly.
 
 ## Requirements
 
@@ -109,7 +110,8 @@ and mesh jobs copy their payloads instead of sharing them.
   meshed world, the preview and the ray-marched distance agree. Glowing blocks flood
   light through the voxels around them, baked per quad corner in the mesher, and
   shadows are rays marched against the same brickmap the far field uses, so there is
-  no shadow map and no second draw of the scene.
+  no shadow map and no second draw of the scene. Bloom, where a world wants it, blurs
+  only the emission the fog let through, screened over the frame so it cannot clip.
 
 Design notes and plans live in [agent_docs/](agent_docs/).
 

@@ -171,3 +171,10 @@ Deno.test("the app-only switches are kept out of the engine's options", () => {
   assert(s.workerTest, "worker self-test");
   eq(appSwitches(new URLSearchParams("?at=1,2")).at, null, "a malformed ?at= is no ?at=");
 });
+
+Deno.test("bloom is the world's default unless the query says otherwise", () => {
+  assert(from("world=forest").render.bloom === true, "the forest should bloom by default");
+  assert(from("world=forest&bloom=0").render.bloom === false, "?bloom=0 should switch it off in the forest");
+  assert(from("world=terrain").render.bloom === false, "the terrain has nothing to bloom and should not");
+  assert(from("world=terrain&bloom=1").render.bloom === true, "?bloom=1 should switch it on anywhere");
+});

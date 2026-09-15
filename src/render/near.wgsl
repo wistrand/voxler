@@ -209,8 +209,33 @@ fn vs_cluster(@builtin(vertex_index) vertex: u32, @builtin(instance_index) insta
   return quad_vertex(quad.x, quad.y, vertex % 6u, cl.y & 0xfffffu);
 }
 
+// What the fragment shader works out: the shaded, fogged colour, and separately the
+// fogged emission, for the bloom pass when it is on (`fs_bloom`).
+struct Shaded {
+  color: vec4f,
+  glow: vec3f,
+}
+
+// Two entry points over one shading function, because a fragment output at a location
+// with no colour target is a pipeline error: the plain pipeline gets `fs`, and the one
+// built with `?bloom=1` gets `fs_bloom` and a second attachment to write the glow into.
 @fragment
 fn fs(in: VsOut) -> @location(0) vec4f {
+  return shade(in).color;
+}
+
+struct BloomOut {
+  @location(0) color: vec4f,
+  @location(1) glow: vec4f,
+}
+
+@fragment
+fn fs_bloom(in: VsOut) -> BloomOut {
+  let shaded = shade(in);
+  return BloomOut(shaded.color, vec4f(shaded.glow, 1.0));
+}
+
+fn shade(in: VsOut) -> Shaded {
   let id = in.id_face >> 3u;
   let face = in.id_face & 7u;
   // Ids past the color table render as id 0, as blockColorTable() documents.
@@ -265,10 +290,16 @@ fn fs(in: VsOut) -> @location(0) vec4f {
     // it, and without this the light pools flat over a crevice.
     lit += base * shade * block_light(in.light);
   }
+  var emitted = vec3f(0.0);
   if (EMISSIVE) {
-    lit += glow.rgb * base;
+    emitted = glow.rgb * base;
+    lit += emitted;
   }
   let color = apply_fog(lit, in.view / dist, dist);
+  // The emission as the fog leaves it, for bloom: `apply_fog` keeps exp(-dist * density)
+  // of a surface's own colour, so this is the part of the glow that reached the eye. A
+  // cap far out blooms as faintly as it is drawn, and past the fog not at all.
+  let glow_seen = emitted * exp(-dist * FOG_DENSITY);
   // Alpha is 1 for opaque blocks, so the opaque pipeline (no blending) ignores it.
-  return vec4f(color, entry.a);
+  return Shaded(vec4f(color, entry.a), glow_seen);
 }

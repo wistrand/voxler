@@ -522,3 +522,39 @@ Still open:
   ground, but by probing the chunk store, so what it flies over depends on what has
   streamed in: a bench driven by it would measure a different path on a slower machine,
   which is exactly what a bench must not do.
+
+## Bloom
+
+Optional, and a world's own default: the forest has it on (`bloom: true` in
+`src/worlds/index.ts`), every other world off. `?bloom=0` and `?bloom=1`, `render.bloom`
+in the API, and the `bloom` switch in the panel decide either way (the switch reloads,
+like the sky and shadows, because it is built into the near pipeline's targets). What it does, in order (`src/render/bloom.ts`, `bloom.wgsl`, and
+`fs_bloom` in `near.wgsl`):
+
+- The near field's opaque passes get a second colour attachment, `rgba8unorm`, and the
+  fragment writes its emission there *as the fog leaves it*: `glow * base * exp(-dist *
+  FOG_DENSITY)`. A cap far out blooms as faintly as it is drawn, and past the fog not at
+  all. Nothing else can bloom: there is no HDR to threshold in this engine and every
+  emission is under 1 by construction, so the emission channel is the threshold. All six
+  glowing blocks are opaque, so the translucent pass and the birds write nothing.
+- A dual-filter blur, four half-size levels down with the 13-tap pattern and back up
+  with the 9-tap tent added at each level. The radius is the level count, so it scales
+  with the frame instead of being a pixel count that reads differently at every size.
+- A screen blend onto the frame, `src + dst - src*dst` as pipeline blend factors, at
+  `DEFAULT_BLOOM_STRENGTH` 0.6. Screen rather than add because nothing tonemaps here and
+  an add around a cluster of caps clips to white; screen cannot pass it.
+- The far field's own glow is not blurred. By the time a cap is far-field it is either a
+  cell-sized lantern the footprint gate has already removed or fogged to nothing.
+
+Cost, grove bench at 1080p on the dev machine, back to back on 2026-09-15: the `bloom`
+pass is **0.197 ms p50, 0.328 p99** (`grove.20260915T075550Z` and `T075604Z`), and the
+second attachment's cost on the near draw is inside the run-to-run noise (`gpu.near.a`
+1.57 and 1.64 ms with bloom against 1.70 and 2.29 without, `T075629Z` and `T075642Z`).
+The frame's other passes read about 50% above the morning's runs in both states because
+the machine was loaded at the time, which is why the pair is compared against itself and
+not against the table in CLAUDE.md. A bench run with bloom on is not comparable to the
+table; the result file carries the switch in its URL.
+
+The bloom stamp spans the whole chain: a pass descriptor's timestamps bracket that pass
+alone, so `Bloom.encode` puts the beginning on the first downsample and the end on the
+composite (two preallocated descriptors filled from the timer's per frame).

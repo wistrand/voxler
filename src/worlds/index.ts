@@ -34,6 +34,10 @@ export interface WorldEntry {
   // travel and a chunk is voxelized once; a world that asks for them pays one more
   // pipeline and one more pass, so it is opt-in.
   readonly birds?: boolean;
+  // Bloom over the glowing blocks by default (`src/render/bloom.ts`). A world that has
+  // glowcaps at night wants it; a daylight world has nothing to bloom. `?bloom=` still
+  // wins over it.
+  readonly bloom?: boolean;
 }
 
 export interface WorldProgram {
@@ -61,7 +65,7 @@ export const WORLDS: Readonly<Record<string, WorldEntry>> = {
   // the grove bench walks 20 voxels under the spawn to get beneath the canopy and the
   // ground here is far enough down that the same walk would be an aerial shot: the scene
   // would stop measuring what it was written to measure.
-  forest: { code: forest, spawn: [8, 188, 8], start: [-108, 267, 293], sky: "night", birds: true },
+  forest: { code: forest, spawn: [8, 188, 8], start: [-108, 267, 293], sky: "night", birds: true, bloom: true },
   // The floor is near y = 40 and the buttes stand a few hundred voxels over it; the
   // spawn is out on the open desert looking at them rather than under one.
   // The monuments stand a kilometre apart over an empty floor, so nearly every brick

@@ -135,6 +135,9 @@ export function optionsFromSearch(params: URLSearchParams, problems: SearchProbl
       wind: flag(params, "wind"),
       cull: intOf(params, "cull"),
       gizmo: flag(params, "gizmo"),
+      // Unset leaves it to the world (the forest has it on); `?bloom=0` and `?bloom=1`
+      // decide either way.
+      bloom: flag(params, "bloom"),
       nearMiB: intOf(params, "nearMB"),
     },
   };

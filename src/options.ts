@@ -44,6 +44,8 @@ export interface WorldSource {
   readonly far?: { readonly size?: number; readonly levels?: number; readonly bricks?: number };
   // Birds over it (`src/render/birds-common.wgsl`). One more pipeline and two more passes.
   readonly birds?: boolean;
+  // Bloom over its glowing blocks by default; `render.bloom` overrides it either way.
+  readonly bloom?: boolean;
 }
 
 export interface CameraOptions {
@@ -100,6 +102,10 @@ export interface RenderOptions {
   readonly cull?: number; // mask: 1 frustum, 2 face, 4 occlusion
   readonly gizmo?: boolean;
   readonly grid?: boolean;
+  // Bloom over the glowing blocks. Unset takes the world's own default (`bloom` in
+  // src/worlds/index.ts; the forest has it on). A second colour attachment on the near
+  // pass and a blur chain over the frame, chosen when the renderer is built.
+  readonly bloom?: boolean;
   readonly nearMiB?: number;
 }
 
@@ -168,6 +174,7 @@ export interface ResolvedOptions {
     readonly cull: number;
     readonly gizmo: boolean;
     readonly grid: boolean;
+    readonly bloom: boolean;
     readonly nearMiB: number;
   };
   readonly controls: boolean;
@@ -296,6 +303,9 @@ export function resolveOptions(options: VoxlerOptions): ResolvedOptions {
       cull: int(renderIn.cull, CULL_ALL, 0, CULL_ALL),
       gizmo: renderIn.gizmo !== false,
       grid: renderIn.grid === true,
+      // The world's own default unless the host or `?bloom=` said otherwise: the forest
+      // has glowcaps at night and asks for it, a daylight world has nothing to bloom.
+      bloom: renderIn.bloom ?? world.bloom === true,
       nearMiB: int(renderIn.nearMiB, DEFAULT_NEAR_OPTIONS.quadMiB, 8, 2048),
     },
     controls: options.controls !== false,

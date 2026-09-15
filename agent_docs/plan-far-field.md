@@ -29,15 +29,16 @@ chunk data for regions an edit has changed (in a worker, `src/far/brick-job.ts`,
 scheduled by `src/far/edits.ts`), `src/far/far.wgsl` marches level by level, lit and fogged by the near
 field's own `src/render/shading.wgsl`, `src/far/coverage.ts` keeps the chunks the near
 field is drawing so the march can leave them to it, and `src/far/far-field.ts` owns the
-buffers and composites the result behind the near field. `?far=on|steps|bricks|levels` turns it on and picks a debug view, `?farLevels`,
+buffers and composites the result behind the near field. `?far=on|steps|bricks|levels|blocks|height` turns it on and picks a debug view, `?farLevels`,
 `?farFirst`, `?farBricks` and `?farSlabs` size the clipmap, `?farScale` sets the march
 resolution and `?farBeam=0` turns the beam pre-pass off, `?farCheck` compares the
 sampled bricks against the chunk reduction, and F queues every level again.
 
-The march costs 0.59 ms p50 over the flyover bench at 1080p, with the beam pre-pass at
-0.066 and slab sampling at 0.786. The far field is still off unless `?far=` asks for it:
-what it draws is correct, but nothing yet decides how far the clipmap should reach for a
-given machine.
+The march costs 1.2 to 1.7 ms p50 over the flyover bench at 1080p and 1.0 over the grove
+(2026-09-15, "An axes word per brick" under phase 5), with the beam pre-pass at 0.066 and
+slab sampling at 0.5. It is on by default; the level count is trimmed to the world's fog
+horizon at startup, and the adaptive controller (`?farAdapt=1`) can move it further, off
+by default because what it moves is visible while the camera is still.
 
 ## Approach
 

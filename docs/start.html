@@ -396,6 +396,7 @@ voxler.start();</code></pre>
   <tr><td><code>workers.factory</code></td><td>The default resolves the worker next to the engine bundle. Pass your own if your bundler does not follow <code>new URL(..., import.meta.url)</code>.</td></tr>
   <tr><td><code>controls: false</code></td><td>No input listeners at all. Drive <code>voxler.camera</code> yourself.</td></tr>
   <tr><td><code>render.gizmo</code></td><td>The debug axis cross in the corner. On by default because the demo wants it; the frame above passes <code>false</code>.</td></tr>
+  <tr><td><code>render.bloom</code></td><td>A soft glow around the glowing blocks: their fogged emission blurred and screened over the frame. Unset takes the world's default (the forest has it on, the others off); about 0.2 ms at 1080p, and a startup choice: it is built into the near pass.</td></tr>
 </table>
 
 <h2>Driving it</h2>
