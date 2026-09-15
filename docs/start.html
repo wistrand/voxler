@@ -38,6 +38,15 @@
     border-radius: 6px; padding: .9rem 1.1rem; color: var(--dim); margin: 0 0 1.25rem;
   }
   .note strong { color: var(--text); }
+  .terms {
+    background: var(--panel); border: 1px solid var(--edge); border-left: 3px solid var(--accent);
+    border-radius: 6px; padding: .9rem 1.1rem .4rem; margin: 0 0 1.5rem; font-size: .95rem;
+  }
+  .terms dl { margin: 0; display: grid; grid-template-columns: max-content 1fr; gap: .35rem 1rem; }
+  .terms dt { color: var(--text); font-weight: 600; white-space: nowrap; }
+  .terms dd { margin: 0 0 .25rem; color: var(--dim); }
+  .terms dd code { background: transparent; padding: 0; }
+  @media (max-width: 40rem) { .terms dl { grid-template-columns: 1fr; gap: .1rem 0; } .terms dd { margin-bottom: .6rem; } }
   table { border-collapse: collapse; width: 100%; margin: 0 0 1.25rem; font-size: .95rem; }
   th, td { text-align: left; padding: .45rem .7rem; border-bottom: 1px solid var(--edge); vertical-align: top; }
   th { color: var(--dim); font-weight: 600; }
@@ -415,6 +424,41 @@ voxler.edit.fillSphere(x, y, z, r, id);</code></pre>
   The world function is fixed once the page is running. Edits go in beside it, in two
   forms that behave differently.
 </p>
+
+<div class="terms">
+  <dl>
+    <dt>SDF</dt>
+    <dd>Signed distance field: a function <code>f(p)</code> that returns how far point
+      <code>p</code> is from the nearest surface, negative inside. A voxler world is one
+      such function in WGSL plus a material function, and everything is sampled from it
+      rather than stored.</dd>
+    <dt>Voxel, chunk</dt>
+    <dd>A voxel is one cell of the unit grid the world is sampled on, holding a block id.
+      A chunk is 32&times;32&times;32 of them, the unit that is generated, stored, meshed
+      and thrown away.</dd>
+    <dt>Near field, far field</dt>
+    <dd>Near: the chunks around the camera, voxelized and drawn as triangles. Far: the
+      same SDF sampled into coarse bricks and ray-marched. Both come from the one field.</dd>
+    <dt>Field brush</dt>
+    <dd>A shape whose distance is folded into the world's SDF before sampling, so it is
+      there at every resolution and terrain closes around it. Two kinds: an <strong>SDF
+      brush</strong> is a WGSL function per brush type, compiled into the world and fixed
+      when it is built; a <strong>CSG brush</strong> is a list of primitives interpreted
+      on the GPU, and is the one a page can create while the world runs.</dd>
+    <dt>CSG</dt>
+    <dd>Constructive solid geometry: a shape built from primitives with set operations.
+      On distances those are <code>min(a, b)</code> for union, <code>max(a, -b)</code> for
+      subtraction, and a smooth minimum for a union with a rounded seam of radius
+      <code>k</code>.</dd>
+    <dt>Primitive, blend</dt>
+    <dd>A primitive is one of seven parametric shapes: sphere, box, rounded box, torus,
+      capsule, cylinder, ellipsoid. The blend is which operation joins it to the shape so
+      far, or joins a whole brush to the world.</dd>
+    <dt>Voxel edit</dt>
+    <dd>Sets block ids directly and does not touch the field. Recorded in a journal, the
+      ordered list of edits, which is replayed whenever the chunk is generated again.</dd>
+  </dl>
+</div>
 
 <h3>Field brushes: a shape folded into the SDF</h3>
 
