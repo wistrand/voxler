@@ -9,6 +9,7 @@
 // So this reads the shaders and checks the numbers.
 
 import {
+  BRICK_AXES_WORD,
   BRICK_CELLS,
   BRICK_COLOR_WORDS,
   BRICK_OCCUPANCY_WORDS,
@@ -30,6 +31,7 @@ const READERS: readonly { path: string; constants: Readonly<Record<string, numbe
       BRICK_CELLS,
       BRICK_WORDS,
       OCCUPANCY_WORDS: BRICK_OCCUPANCY_WORDS,
+      AXES_WORD: BRICK_AXES_WORD,
       ENTRY_SOLID,
     },
   },
@@ -38,6 +40,7 @@ const READERS: readonly { path: string; constants: Readonly<Record<string, numbe
     constants: {
       SH_BRICK_CELLS: BRICK_CELLS,
       SH_BRICK_WORDS: BRICK_WORDS,
+      SH_AXES_WORD: BRICK_AXES_WORD,
       SH_ENTRY_SOLID: ENTRY_SOLID,
     },
   },
@@ -48,6 +51,7 @@ const READERS: readonly { path: string; constants: Readonly<Record<string, numbe
       BRICK_WORDS,
       OCCUPANCY_WORDS: BRICK_OCCUPANCY_WORDS,
       COLOR_WORDS: BRICK_COLOR_WORDS,
+      AXES_WORD: BRICK_AXES_WORD,
       ENTRY_SOLID,
     },
   },
@@ -60,7 +64,8 @@ function wgslConst(src: string, name: string): number | null {
 }
 
 Deno.test("every shader that decodes a brick agrees with the brick layout", () => {
-  assert(BRICK_WORDS === BRICK_OCCUPANCY_WORDS + BRICK_COLOR_WORDS, "the stride is its own parts");
+  assert(BRICK_AXES_WORD === BRICK_OCCUPANCY_WORDS + BRICK_COLOR_WORDS, "the axes word is not right after the colours");
+  assert(BRICK_WORDS === BRICK_AXES_WORD + 1, "the stride is its own parts");
   let checked = 0;
   for (const reader of READERS) {
     const src = Deno.readTextFileSync(reader.path);
@@ -71,5 +76,5 @@ Deno.test("every shader that decodes a brick agrees with the brick layout", () =
       checked++;
     }
   }
-  assert(checked === 12, `expected to check 12 constants, checked ${checked}`);
+  assert(checked === 15, `expected to check 15 constants, checked ${checked}`);
 });

@@ -271,6 +271,27 @@ disproved, drop the marker or correct the entry. Append new traps as they are hi
   every level boundary, clearest over flat water. Start the walk from the face the ray
   actually crossed. Read the pixels along a column and compare against a debug view
   that colors by level rather than guessing from a screenshot.
+- **The far march's cost is grazing rays, and one word per brick removes a third of it.**
+  Read off `?far=steps` at the terrain spawn looking at the horizon: rays that hit
+  something were 86% of all steps, and a hit ray averaged 73 brick steps and 86 cell
+  steps; sky rays were cheap already, the beam pre-pass starts them past every level.
+  The cells were the waste. A ray from just above the ground toward the horizon skims
+  through surface bricks whose lower rows are solid and upper rows are air, and the cell
+  DDA walked those air rows one cell at a time, up to 32 per brick, and hit nothing.
+  Now every brick carries an axes word after its colours (`BRICK_AXES_WORD`): bit `x`,
+  `8 + y`, `16 + z` for every solid cell. A ray's segment through a brick covers a run of
+  rows on each axis, and if the run is empty on any axis the walk is skipped
+  (`brick_can_hit` in far.wgsl, `sh_brick_can_hit` for shadow rays). Same camera, skip
+  on against off, switched at runtime: hit rays 159 to 146 steps, sky rays 43 to 9
+  (their cell steps 34.5 to 0.2), the march 3.0 ms p50 against 4.3 to 6.0 over three
+  alternating rounds, and **0 of 2,253,375 pixels differ**. Exact by construction, and
+  held to the finely sampled reference by the TypeScript port in `march_test.ts`, which
+  has a test that the skip fires and changes no first hit. Two things that had to come
+  with it: every writer of a brick sets the word (`setCell`, `fillBrick`, both GPU
+  builders) and a hand-built brick in a test that forgets it is skipped as empty, which is
+  what the layout test and the port's test are for; and the far march now also stops at
+  the fog horizon (`far.eye.w`) instead of the last level's window edge, worth a few
+  percent at this view, where the fog has the pixel to within FOG_RESIDUAL anyway.
 - **A third of the mesh jobs were for the chunk under the surface, and found nothing.**
   `cannotHaveFaces` skipped a job only for a uniform chunk whose six neighbours were
   uniform too. The chunk straight under a surface chunk is uniform stone, but the chunk

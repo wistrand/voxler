@@ -32,9 +32,9 @@ struct LevelParams {
 
 struct FarParams {
   inv_view_proj: mat4x4f,
-  eye: vec4f, // camera offset in render space; w unused
+  eye: vec4f, // camera offset in render space; w: the fog horizon in voxels
   grid: vec4u, // bricks per side, max brick steps, max cell steps, debug view
-  counts: vec4u, // x: levels, y: 1 when the beam pre-pass ran; zw unused
+  counts: vec4u, // x: levels, y: 1 when the beam pre-pass ran, z: 1 to use the axes word; w unused
   camera_chunk: vec4i, // the camera's chunk, for world voxel coordinates; w unused
   mask_origin: vec4i, // coverage window's min corner, in chunks; w unused
   level: array<LevelParams, 8>, // MAX_LEVELS
@@ -62,8 +62,11 @@ struct FarColors {
 @group(0) @binding(8) var beam_in: texture_2d<f32>;
 
 const BRICK_CELLS: i32 = 8;
-const BRICK_WORDS: u32 = 144u;
+const BRICK_WORDS: u32 = 145u;
 const OCCUPANCY_WORDS: u32 = 16u;
+// The word after the colours: bit x, 8 + y and 16 + z for every solid cell
+// (src/far/reduce.ts `BRICK_AXES_WORD`). See `brick_can_hit`.
+const AXES_WORD: u32 = 144u;
 // A brick that is solid throughout with one block id is the entry itself, with no
 // pool slot and no cell walk (design-formats.md "Brick and clipmap").
 const ENTRY_SOLID: u32 = 0x80000000u;
@@ -284,6 +287,27 @@ struct Hit {
   bricks: u32,
 }
 
+// Whether a ray's segment through a brick can meet any solid cell, from the brick's axes
+// word alone. The segment runs from `t0` to `t1` in cell units; on each axis it covers a
+// run of cell rows, and if that run holds no occupied row on some axis the walk cannot
+// hit and is not worth taking. This is what makes a grazing ray cheap: a ray skimming
+// above the ground crosses surface bricks whose lower rows are solid and upper rows are
+// air, and without this it walked those upper rows a cell at a time, up to 32 cells,
+// for nothing. Exact by construction: a row is skipped only when it is empty, and the
+// rows tested are the rows the walk would visit, with the exit rounded outwards so
+// float error can only test more rows, never fewer. The TypeScript port in
+// src/far/march_test.ts does the same and is held to a finely sampled reference.
+fn brick_can_hit(axes: u32, base: vec3i, p0: vec3f, dir: vec3f, t0: f32, t1: f32) -> bool {
+  let a = p0 + dir * (t0 + 1e-4) - vec3f(base * BRICK_CELLS);
+  let b = p0 + dir * (t1 + 1e-4) - vec3f(base * BRICK_CELLS);
+  let lo = clamp(vec3i(floor(min(a, b))), vec3i(0), vec3i(BRICK_CELLS - 1));
+  let hi = clamp(vec3i(floor(max(a, b))), vec3i(0), vec3i(BRICK_CELLS - 1));
+  // A run of rows lo..hi as a bit mask: ((1 << (hi - lo + 1)) - 1) << lo.
+  let run = ((vec3u(1u) << vec3u(hi - lo + 1)) - vec3u(1u)) << vec3u(lo);
+  let rows = vec3u(axes & 0xffu, (axes >> 8u) & 0xffu, (axes >> 16u) & 0xffu);
+  return all((run & rows) != vec3u(0u));
+}
+
 // Walks one occupied brick's cells from `t0`, in this level's cell units. `p0` is the
 // ray origin in cell units and `inv` the reciprocal direction.
 fn march_brick(
@@ -329,12 +353,14 @@ fn march_brick(
     // a covered chunk the raster pass did not fill, and stopping there painted sky over
     // the rock behind it, a staircase of sky-coloured steps down the edge
     // (gotchas.md "The near field's coverage is a chunk, not a pixel").
-    let covered = cell_solid(brick, cell) &&
-      near_covers((base * BRICK_CELLS + cell) * cell_voxels + world_base);
+    // One load for both tests: whether the compiler merges two reads of the same
+    // storage word across a function call is not something to lean on.
+    let solid = cell_solid(brick, cell);
+    let covered = solid && near_covers((base * BRICK_CELLS + cell) * cell_voxels + world_base);
     if (covered) {
       (*out).stopped = true;
     }
-    if (cell_solid(brick, cell) && !covered) {
+    if (solid && !covered) {
       (*out).hit = true;
       (*out).block = cell_block(brick, cell);
       (*out).axis = axis;
@@ -392,6 +418,9 @@ fn march_level(level: u32, dir: vec3f, t_voxels: f32, out: ptr<function, Hit>) -
   // around the camera and not a surface.
   var face = FACE_NONE;
   for (var i = 0u; i < far.grid.y; i++) {
+    if (t_enter * cell_voxels >= far.eye.w) {
+      return t_enter * cell_voxels; // the fog horizon: see march()
+    }
     (*out).bricks++;
     let entry = brick_entry(level, brick);
     if ((entry & ENTRY_SOLID) != 0u) {
@@ -411,10 +440,18 @@ fn march_level(level: u32, dir: vec3f, t_voxels: f32, out: ptr<function, Hit>) -
         (*out).t = t_enter * cell_voxels;
         return t_enter * cell_voxels;
       }
-    } else if (entry != 0u && march_brick(entry - 1u, brick, p0, dir, inv, t_enter, world_base, i32(cell_voxels), face, out)) {
-      (*out).level = level;
-      (*out).t = (*out).t * cell_voxels; // cell units to voxels
-      return (*out).t;
+    } else if (entry != 0u) {
+      // The exit is the nearest of the three far planes, which is where the brick DDA
+      // below is about to step to.
+      let t_exit = min(t.x, min(t.y, t.z));
+      if (
+        (far.counts.z == 0u || brick_can_hit(bricks[(entry - 1u) * BRICK_WORDS + AXES_WORD], brick, p0, dir, t_enter, t_exit)) &&
+        march_brick(entry - 1u, brick, p0, dir, inv, t_enter, world_base, i32(cell_voxels), face, out)
+      ) {
+        (*out).level = level;
+        (*out).t = (*out).t * cell_voxels; // cell units to voxels
+        return (*out).t;
+      }
     }
     if (t.x <= t.y && t.x <= t.z) {
       t_enter = t.x;
@@ -577,6 +614,13 @@ fn march(dir: vec3f, start: f32) -> Hit {
   var out = Hit(false, false, 0u, 0u, 0u, vec3i(0), 0.0, 0u, 0u);
   var t = start;
   for (var level = 0u; level < far.counts.x; level++) {
+    // Past the fog horizon the fog has the pixel: a hit there is mixed to within
+    // FOG_RESIDUAL of the sky the miss would have drawn anyway (src/render/sky.ts). The
+    // level count is trimmed to the horizon already; this ends the last level at it
+    // instead of at its window's edge, which is up to a fifth further out.
+    if (t >= far.eye.w) {
+      break;
+    }
     let t_exit = march_level(level, dir, t, &out);
     if (out.hit) {
       return out;

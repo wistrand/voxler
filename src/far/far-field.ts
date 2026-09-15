@@ -27,7 +27,7 @@ import type { TextureData } from "../render/textures.ts";
 import { CoverageMask, COVERAGE_WORDS } from "./coverage.ts";
 import { PROBE_WORDS, WORLD_PROBE_SAMPLES, WORLD_PROBE_WORDS } from "./probe.ts";
 import skyColorWgsl from "../render/sky-color.wgsl" with { type: "text" };
-import { skyConstantsWgsl } from "../render/sky.ts";
+import { fogHorizonVoxels, skyConstantsWgsl } from "../render/sky.ts";
 import shadingWgsl from "../render/shading.wgsl" with { type: "text" };
 import farWgsl from "./far.wgsl" with { type: "text" };
 import buildWgsl from "./far-build.wgsl" with { type: "text" };
@@ -131,6 +131,12 @@ export class FarField {
   debug = DEBUG_NONE;
   // Run the beam pre-pass: one coarse ray per tile gives the march a start distance.
   beam = true;
+  // Skip a brick's cell walk when its axes word says the ray's rows are empty
+  // (`brick_can_hit` in far.wgsl). A switch so the two can be diffed at runtime: they
+  // must render the same pixels.
+  axes = true;
+  // The fog horizon in voxels, from the world's sky; set with the world.
+  private readonly horizon: number;
   // Told when a slab's bricks have been sampled and are in the pool. A sample writes
   // whatever the field says, so anything laid over the field there (an edited chunk's
   // bricks) has to go back on top: src/far/edits.ts listens.
@@ -221,6 +227,7 @@ export class FarField {
   private uploadBytes = 0;
 
   constructor(device: GPUDevice, world: WorldProgram, options: FarFieldOptions = {}) {
+    this.horizon = fogHorizonVoxels(world.sky);
     this.device = device;
     this.world = world;
     this.slabsPerFrame = options.slabsPerFrame ?? DEFAULT_SLABS_PER_FRAME;
@@ -898,6 +905,9 @@ export class FarField {
     if (!this.ready) return;
     for (let i = 0; i < 16; i++) this.paramsF32[i] = invViewProj[i];
     for (let i = 0; i < 3; i++) this.paramsF32[16 + i] = eye[i];
+    // The fog horizon, where the march stops: past it the fog has the pixel to within
+    // FOG_RESIDUAL. Infinity for a world with no fog, which f32 carries as is.
+    this.paramsF32[19] = this.horizon;
     const size = this.map.options.size;
     this.paramsU32[20] = size;
     this.paramsU32[21] = size * 3; // brick steps per level
@@ -905,6 +915,7 @@ export class FarField {
     this.paramsU32[23] = this.debug;
     this.paramsU32[24] = this.map.levels;
     this.paramsU32[25] = this.beam ? 1 : 0;
+    this.paramsU32[26] = this.axes ? 1 : 0;
     for (let i = 0; i < 3; i++) {
       this.paramsI32[28 + i] = cameraChunk[i];
       this.paramsI32[32 + i] = this.coverage.origin[i];

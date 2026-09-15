@@ -342,6 +342,20 @@ front of it), which is why the default only moved once the adaptive controller e
 to pay for it by giving up levels that fog has already taken. `?farScale=0.5` is the
 A/B, and the difference is in the contour lines, not in the fog.
 
+**An axes word per brick skips the cell walk a grazing ray would waste.** Measured before
+touching anything, at the terrain spawn looking at the horizon (`?far=steps`): rays that
+hit something were 86% of all steps, at 73 brick steps and 86 cell steps each, and the
+cell steps were mostly air rows inside surface bricks, walked one cell at a time by a ray
+skimming just above the ground. Each brick now carries one word after its colours, bit
+`x`, `8 + y` and `16 + z` for every solid cell (design-formats.md "Brick and clipmap"),
+and a ray whose run of rows through the brick is empty on any axis skips the walk
+(`brick_can_hit` in far.wgsl, `sh_brick_can_hit` in shadow.wgsl). Same camera, switched
+at runtime: hit rays 159 to 146 steps, sky rays 43 to 9, the march 3.0 ms p50 against
+4.3 to 6.0 over three alternating rounds, and 0 of 2,253,375 pixels differ. The march
+also stops at the fog horizon (`far.eye.w`) rather than the last window's edge, worth a
+few percent there. The TypeScript port in `march_test.ts` carries the same test and is
+held to the finely sampled reference.
+
 Coarse bricks are rebuilt from the level under them on the GPU (`reduce_bricks` in
 far-build.wgsl), not from chunk data: a coarse brick spans more than a chunk, and the
 chunks around an edit are on the GPU only. One dispatch per level, lowest first, so a

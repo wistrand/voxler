@@ -531,6 +531,7 @@ The far field stores occupancy in bricks of 8 x 8 x 8 cells.
 | Occupancy     | 512 bits = 16 `u32` in the brick pool storage buffer                     |
 | Cell order    | `x + y*8 + z*64`, bit `i & 31` of word `i >> 5`                          |
 | Material      | one `u8` block id per cell, four per `u32`, after the occupancy words    |
+| Axes          | one `u32` after the material: bit `x`, `8 + y` and `16 + z` set for every solid cell, so a ray whose run of rows through the brick is empty on any axis skips the cell walk (`brick_can_hit`) |
 | Indirection   | one `u32` storage buffer, L slices of B x B x B, toroidal (`brick mod B`) |
 | Entry values  | `0` empty, high bit set: solid throughout, block id in the low byte, else `slot + 1` |
 

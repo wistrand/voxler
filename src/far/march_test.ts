@@ -8,7 +8,7 @@
 // of a brick. The level walk and the toroidal addressing came with phase 3.
 
 import { random01 } from "../util/random.ts";
-import { BRICK_CELLS, BRICK_OCCUPANCY_WORDS, BRICK_WORDS, cellIndex } from "./bricks.ts";
+import { BRICK_AXES_WORD, BRICK_CELLS, BRICK_OCCUPANCY_WORDS, BRICK_WORDS, cellIndex } from "./bricks.ts";
 
 function assert(cond: boolean, what: string): void {
   if (!cond) throw new Error(what);
@@ -54,8 +54,13 @@ function marchLevel(w: World, p0: number[], dir: number[], t0: number): LevelRes
   for (let s = 0; s < MAX_BRICK_STEPS; s++) {
     const entry = brickEntry(w, brick);
     if (entry !== 0) {
-      const hit = marchBrick(w, entry - 1, brick, p0, d, inv, enter);
-      if (hit) return { hit, exit: enter };
+      const exit = Math.min(t[0], t[1], t[2]);
+      if (brickCanHit(w, entry - 1, brick, p0, d, enter, exit)) {
+        const hit = marchBrick(w, entry - 1, brick, p0, d, inv, enter);
+        if (hit) return { hit, exit: enter };
+      } else {
+        skipped++;
+      }
     }
     const axis = t[0] <= t[1] && t[0] <= t[2] ? 0 : t[1] <= t[2] ? 1 : 2;
     enter = t[axis];
@@ -92,6 +97,25 @@ function marchLevels(levels: LevelSetup[], dir: number[]): { hit: number[] | nul
 function march(w: World, ox: number, oy: number, oz: number, dx: number, dy: number, dz: number): number[] | null {
   const len = Math.hypot(dx, dy, dz);
   return marchLevel(w, [ox, oy, oz], [dx / len, dy / len, dz / len], 0).hit;
+}
+
+// Bricks whose cell walk the axes word let the port skip, for the test that counts them.
+let skipped = 0;
+
+// The port of `brick_can_hit` in far.wgsl: the run of rows the segment covers on each
+// axis, against the rows the brick's axes word says hold anything.
+function brickCanHit(w: World, brick: number, base: number[], p0: number[], d: number[], t0: number, t1: number): boolean {
+  const axes = w.bricks[brick * BRICK_WORDS + BRICK_AXES_WORD];
+  for (let i = 0; i < 3; i++) {
+    const a = p0[i] + d[i] * (t0 + 1e-4) - base[i] * BRICK_CELLS;
+    const b = p0[i] + d[i] * (t1 + 1e-4) - base[i] * BRICK_CELLS;
+    const lo = Math.max(0, Math.min(BRICK_CELLS - 1, Math.floor(Math.min(a, b))));
+    const hi = Math.max(0, Math.min(BRICK_CELLS - 1, Math.floor(Math.max(a, b))));
+    const run = ((1 << (hi - lo + 1)) - 1) << lo;
+    const rows = (axes >>> (8 * i)) & 0xff;
+    if ((run & rows) === 0) return false;
+  }
+  return true;
 }
 
 function marchBrick(
@@ -185,6 +209,7 @@ function world(seed: number, size: number): World {
       any = true;
       bricks[at + (c >>> 5)] |= 1 << (c & 31);
       bricks[at + BRICK_OCCUPANCY_WORDS + (c >>> 2)] |= 3 << ((c & 3) * 8);
+      bricks[at + BRICK_AXES_WORD] |= (1 << (c & 7)) | (1 << (8 + ((c >>> 3) & 7))) | (1 << (16 + (c >>> 6)));
     }
     if (!any) continue;
     indirection[i] = count + 1;
@@ -223,6 +248,33 @@ Deno.test("the two-level DDA finds the same first cell as a finely sampled ray",
   }
 });
 
+Deno.test("the axes word skips cell walks and never changes the first hit", () => {
+  // The comparison against the finely sampled reference above already runs with the
+  // skip in the port; this pins down that the skip actually fired, and that a world of
+  // half-empty bricks marches to the same cells with it and without it.
+  skipped = 0;
+  const seeds = [1, 2, 3];
+  let checked = 0;
+  for (const seed of seeds) {
+    const w = world(seed, 6);
+    const extent = w.size * BRICK_CELLS;
+    // The same world with every axes word saying "everything": the skip never fires.
+    const full: World = { ...w, bricks: w.bricks.slice() };
+    for (let b = 0; b * BRICK_WORDS < full.bricks.length; b++) full.bricks[b * BRICK_WORDS + BRICK_AXES_WORD] = 0xFFFFFF;
+    for (let i = 0; i < 300; i++) {
+      const o = [0, 1, 2].map((k) => random01(seed * 7 + i, k) * extent);
+      const d = [0, 1, 2].map((k) => random01(seed * 11 + i, k + 3) * 2 - 1);
+      if (Math.hypot(...d) < 1e-3) continue;
+      const a = march(w, o[0], o[1], o[2], d[0], d[1], d[2]);
+      const b = march(full, o[0], o[1], o[2], d[0], d[1], d[2]);
+      assert(JSON.stringify(a) === JSON.stringify(b), `ray ${i} of seed ${seed}: with the skip ${a}, without ${b}`);
+      checked++;
+    }
+  }
+  assert(checked > 500, `only ${checked} rays compared`);
+  assert(skipped > 0, "the axes word never skipped a brick; the test is not testing anything");
+});
+
 Deno.test("an empty brick costs one step whatever its size", () => {
   // The point of the outer level: a ray across empty space steps per brick, not per
   // cell. Counting brick steps over a world with one solid brick at the far end.
@@ -230,6 +282,7 @@ Deno.test("an empty brick costs one step whatever its size", () => {
   const indirection = new Uint32Array(size ** 3);
   const bricks = new Uint32Array(BRICK_WORDS);
   for (let c = 0; c < BRICK_CELLS ** 3; c++) bricks[c >>> 5] |= 1 << (c & 31);
+  bricks[BRICK_AXES_WORD] = 0xFFFFFF;
   indirection[5 + 0 * size + 0 * size * size] = 1; // brick (5, 0, 0), fully solid
   const w: World = { size, indirection, bricks };
   const hit = march(w, 0.5, 4.5, 4.5, 1, 0, 0);
@@ -283,6 +336,7 @@ Deno.test("a ray that leaves a level carries on in the next, from where it left"
   const coarse: World = { size, indirection: new Uint32Array(size ** 3), bricks: new Uint32Array(BRICK_WORDS * 2) };
   const solid = new Uint32Array(BRICK_WORDS);
   for (let c = 0; c < BRICK_CELLS ** 3; c++) solid[c >>> 5] |= 1 << (c & 31);
+  solid[BRICK_AXES_WORD] = 0xFFFFFF; // every writer sets the axes word; a hand-built brick must too
   // The ray runs along +x from the middle of both windows, which is level 1 brick
   // (2, 2, 2). That brick is solid too: the ray is past it by the time it steps up,
   // and hitting it would mean the coarse level re-marched what the fine one covered.

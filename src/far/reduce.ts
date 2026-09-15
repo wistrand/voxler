@@ -29,7 +29,14 @@ export const BRICK_CELLS = 8;
 export const BRICK_CELL_COUNT = BRICK_CELLS ** 3;
 export const BRICK_OCCUPANCY_WORDS = BRICK_CELL_COUNT / 32; // 16
 export const BRICK_COLOR_WORDS = BRICK_CELL_COUNT / 4; // 128, one u8 block id per cell
-export const BRICK_WORDS = BRICK_OCCUPANCY_WORDS + BRICK_COLOR_WORDS;
+// One word after the colours: which cell rows hold anything, per axis. Bit x of the low
+// byte is set when any solid cell has that x, bits 8..15 the same for y and 16..23 for
+// z. A ray whose segment through the brick touches no occupied row on some axis cannot
+// hit the brick, and the march skips the cell walk on that (design-formats.md "Brick and
+// clipmap"). Written wherever a brick is: `setCell`, `fillBrick`, and the two GPU
+// builders in far-build.wgsl.
+export const BRICK_AXES_WORD = BRICK_OCCUPANCY_WORDS + BRICK_COLOR_WORDS; // 144
+export const BRICK_WORDS = BRICK_AXES_WORD + 1; // 145
 
 // Indirection entry values (design-formats.md "Brick and clipmap"): 0 empty, the high
 // bit set for a brick that is solid throughout with one block id in the low byte, and
@@ -75,6 +82,13 @@ export function bricksPerChunkSide(level: number): number {
 export function setCell(words: Uint32Array, at: number, i: number, id: number): void {
   words[at + (i >>> 5)] |= 1 << (i & 31);
   words[at + BRICK_OCCUPANCY_WORDS + (i >>> 2)] |= Math.min(id, 255) << ((i & 3) * 8);
+  // Cell order is x + y*8 + z*64.
+  words[at + BRICK_AXES_WORD] |= (1 << (i & 7)) | (1 << (8 + ((i >>> 3) & 7))) | (1 << (16 + (i >>> 6)));
+}
+
+// The axes word of a brick: bit x, 8 + y and 16 + z for every solid cell.
+export function brickAxes(words: Uint32Array, at: number): number {
+  return words[at + BRICK_AXES_WORD];
 }
 
 export function cellSolid(words: Uint32Array, at: number, i: number): boolean {
@@ -94,7 +108,8 @@ export function clearBrick(words: Uint32Array, at: number): void {
 export function fillBrick(words: Uint32Array, at: number, id: number): void {
   const byte = Math.min(id, 255);
   words.fill(0xFFFFFFFF, at, at + BRICK_OCCUPANCY_WORDS);
-  words.fill(byte * 0x01010101, at + BRICK_OCCUPANCY_WORDS, at + BRICK_WORDS);
+  words.fill(byte * 0x01010101, at + BRICK_OCCUPANCY_WORDS, at + BRICK_AXES_WORD);
+  words[at + BRICK_AXES_WORD] = 0xFFFFFF;
 }
 
 // One brick of a chunk at `level`, brick (sx, sy, sz) of bricksPerChunkSide(level)^3.

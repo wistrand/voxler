@@ -53,9 +53,13 @@ pool, sampled from the world SDF on the GPU a slab at a time as the camera scrol
 an edit has changed and from the level below for the coarse levels, marched level by
 level in compute at full resolution behind a beam pre-pass, and composited behind the
 near field, which wins every pixel it drew (depth) and every chunk it is drawing (a
-coverage mask). The march costs 0.59 ms p50 at 1080p over the flyover bench. It is on by
-default (`?far=0` turns it off) and stays a plan file rather than an architecture doc for
-now. A world picks its own clipmap where the defaults do not suit it (`far` in
+coverage mask). The march costs 1.2 to 1.7 ms p50 over the flyover bench and 1.0 over
+the grove (2026-09-15, below). Each brick carries an axes word, one bit per occupied
+row on each axis, so a ray skims past the air rows of a surface brick without walking
+them cell by cell, and the march stops at the fog horizon rather than at the last
+window's edge ([plan-far-field.md](agent_docs/plan-far-field.md) "An axes word per
+brick"). It is on by default (`?far=0` turns it off) and stays a plan file rather than an
+architecture doc for now. A world picks its own clipmap where the defaults do not suit it (`far` in
 `src/worlds/index.ts`), and the level count it gets is that trimmed to the distance its
 fog closes the view at, because a level past the fog horizon marches for a result the sky
 pass already drew. Blocks light the cells around them here too, gathered at the hit
@@ -463,7 +467,7 @@ species, falls and a different scatter and its spawn moved to 188
 | Metric                                     | Target                                  | Measured                                        |
 | ------------------------------------------ | --------------------------------------- | ----------------------------------------------- |
 | Frame time, dev machine (Arc B390, 120 Hz) | under 8.3 ms (hold 120 Hz)              | flyover misses 46 frames of 1151 since the far field went full resolution; spin, cave and teleport held it when last run (interval p99 8.34); the grove misses 12 of 1425 |
-| GPU per frame, flyover                     | under 8.3 ms                            | 6.3 ms (sum of pass p50s, 20:15 run; 4.0 before the full-resolution march); spin 4.5, cave 3.8, teleport 2.5, all from 18:35 |
+| GPU per frame, flyover                     | under 8.3 ms                            | 6.3 ms (sum of pass p50s, 20:15 run; 4.0 before the full-resolution march); spin 4.5, cave 3.8, teleport 2.5, all from 18:35. Since 2026-09-15 the far march is 1.2 to 1.7 ms of that instead of 2.5 to 2.9 (`flyover.20260915T0718*` against `flyover.20260914T1303*`) |
 | Frame time, integrated GPU (Apple silicon) | under 16.7 ms                           | met: an M3 on macOS 26.4.1 (Chrome 152, `apple / metal-3`) holds its 60 Hz panel with 0 missed frames in both flyover and grove; CPU frame 1.18 and 0.47 p50. Its pass timings are not comparable to the rows above ([gotchas.md](agent_docs/gotchas.md) "GPU pass timings do not mean the same thing on an Apple GPU") |
 | Frame time, discrete GPU                   | under 7 ms                              | unmeasured, no hardware                         |
 | Main-thread CPU per frame                  | under 2 ms, flat in resident chunks     | p50 0.34-1.69; p99 0.70-5.26, over in scenes that stream hard |
@@ -514,16 +518,25 @@ to light the risers of a curved voxel surface.
 Four things are over target, and each is recorded where it belongs rather than smoothed
 away here:
 
-- **The far-field march is 3.08 ms p50** in the flyover, near 40% of the frame's GPU time,
-  since it went to full resolution and picked up block light. What it bought is distant
-  terraces and contour lines that survive the distance; whether that trade holds on a
-  slower GPU is unmeasured.
+- **The far-field march was 3.08 ms p50** in the flyover, near 40% of the frame's GPU
+  time, since it went to full resolution and picked up block light. What it bought is
+  distant terraces and contour lines that survive the distance; whether that trade holds
+  on a slower GPU is unmeasured. On 2026-09-15 the axes word took it to 1.18 and 1.70 ms
+  p50 over two flyover runs (against 2.88 and 2.49 the day before on the same code
+  otherwise, `flyover.20260915T071807Z` against `flyover.20260914T130329Z`) and the
+  grove's from 1.38 to 0.98 and 1.05 (`grove.20260915T0718*` against
+  `grove.20260913T091555Z`), with the grove's missed frames 12 of 1425 to 1 and 2 of
+  about 900, and its far-field p99 4.65 to 1.7 and 2.0. The near draw moved with it, 1.25
+  to 0.92 and 1.18 p50 in the grove, because shadow rays walk the same bricks; that one
+  is inside run-to-run noise on the flyover and is not claimed there.
 - **CPU frame p99**, 3.7 ms in the flyover and 5.3 in the teleport against a 2 ms target.
   That is the main thread applying mesh results and uploading them in bursts, not
   steady-state work; p50 is 1.4 and 1.6.
 - **The grove bench's far-field build spikes.** 4.98 ms p50 and 19.2 p99 in a world an
-  order richer than terrain, which is what misses 12 frames of 1425
-  (`grove.20260913T091555Z`); `?farSlabs=1` trades the p99 for a slower catch-up. Two
+  order richer than terrain, which is what missed 12 frames of 1425
+  (`grove.20260913T091555Z`); `?farSlabs=1` trades the p99 for a slower catch-up. The
+  2026-09-15 runs read 4.5 and 5.0 p50, 9.2 and 10.3 p99, and miss 1 and 2 frames: the
+  march got cheaper, the build did not. Two
   earlier readings of this scene were wrong in opposite directions and both are recorded:
   runs that walked underground ([gotchas.md](agent_docs/gotchas.md) "The grove bench
   walked 44 voxels underground") and runs that started before the world was built

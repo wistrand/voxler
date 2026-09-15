@@ -56,9 +56,13 @@ const WORLD_PROBE_WORDS = WORLD_PROBE_HEADER + WORLD_PROBE_SAMPLES * 4u;
 @group(0) @binding(8) var<storage, read_write> reduce: array<u32>;
 
 const BRICK_CELLS: u32 = 8u;
-const BRICK_WORDS: u32 = 144u;
+const BRICK_WORDS: u32 = 145u;
 const OCCUPANCY_WORDS: u32 = 16u;
 const COLOR_WORDS: u32 = 128u;
+// The word after the colours: bit x, 8 + y and 16 + z for every solid cell, so a ray can
+// tell from one word whether its path through the brick meets any occupied row at all
+// (src/far/reduce.ts `BRICK_AXES_WORD`).
+const AXES_WORD: u32 = 144u;
 const CELLS_PER_THREAD: u32 = 8u;
 // Reported for a brick that is occupied but found no free slot.
 const REPORT_DROPPED: u32 = 0xFFFFFFFFu;
@@ -78,6 +82,7 @@ var<workgroup> wg_occupancy: array<atomic<u32>, 16>;
 var<workgroup> wg_colors: array<atomic<u32>, 128>;
 var<workgroup> wg_any: atomic<u32>;
 var<workgroup> wg_solid: atomic<u32>; // cells found solid
+var<workgroup> wg_axes: atomic<u32>; // the axes word (AXES_WORD)
 var<workgroup> wg_min: atomic<u32>; // block id range over them
 var<workgroup> wg_max: atomic<u32>;
 var<workgroup> wg_slot: u32;
@@ -185,6 +190,7 @@ fn build_slab(@builtin(workgroup_id) wg: vec3u, @builtin(local_invocation_index)
   if (li == 0u) {
     atomicStore(&wg_any, 0u);
     atomicStore(&wg_solid, 0u);
+    atomicStore(&wg_axes, 0u);
     atomicStore(&wg_min, 0xFFFFu);
     atomicStore(&wg_max, 0u);
   }
@@ -223,6 +229,7 @@ fn build_slab(@builtin(workgroup_id) wg: vec3u, @builtin(local_invocation_index)
     atomicOr(&wg_occupancy[c >> 5u], 1u << (c & 31u));
     atomicOr(&wg_colors[c >> 2u], id << ((c & 3u) * 8u));
     atomicStore(&wg_any, 1u);
+    atomicOr(&wg_axes, (1u << u32(cell.x)) | (1u << (8u + u32(cell.y))) | (1u << (16u + u32(cell.z))));
     solid++;
     lo = min(lo, id);
     hi = max(hi, id);
@@ -269,6 +276,9 @@ fn build_slab(@builtin(workgroup_id) wg: vec3u, @builtin(local_invocation_index)
   let at = slot * BRICK_WORDS;
   if (li < OCCUPANCY_WORDS) {
     out_bricks[at + li] = atomicLoad(&wg_occupancy[li]);
+  }
+  if (li == 0u) {
+    out_bricks[at + AXES_WORD] = atomicLoad(&wg_axes);
   }
   for (var i = li; i < COLOR_WORDS; i += 64u) {
     out_bricks[at + OCCUPANCY_WORDS + i] = atomicLoad(&wg_colors[i]);
@@ -327,6 +337,7 @@ fn reduce_bricks(@builtin(workgroup_id) wg: vec3u, @builtin(local_invocation_ind
   if (li == 0u) {
     atomicStore(&wg_any, 0u);
     atomicStore(&wg_solid, 0u);
+    atomicStore(&wg_axes, 0u);
     atomicStore(&wg_min, 0xFFFFu);
     atomicStore(&wg_max, 0u);
   }
@@ -367,6 +378,7 @@ fn reduce_bricks(@builtin(workgroup_id) wg: vec3u, @builtin(local_invocation_ind
     atomicOr(&wg_occupancy[c >> 5u], 1u << (c & 31u));
     atomicOr(&wg_colors[c >> 2u], id << ((c & 3u) * 8u));
     atomicStore(&wg_any, 1u);
+    atomicOr(&wg_axes, (1u << u32(cell.x)) | (1u << (8u + u32(cell.y))) | (1u << (16u + u32(cell.z))));
     solid++;
     lo = min(lo, id);
     hi = max(hi, id);
@@ -397,6 +409,9 @@ fn reduce_bricks(@builtin(workgroup_id) wg: vec3u, @builtin(local_invocation_ind
   let dst = slot * BRICK_WORDS;
   if (li < OCCUPANCY_WORDS) {
     out_bricks[dst + li] = atomicLoad(&wg_occupancy[li]);
+  }
+  if (li == 0u) {
+    out_bricks[dst + AXES_WORD] = atomicLoad(&wg_axes);
   }
   for (var i = li; i < COLOR_WORDS; i += 64u) {
     out_bricks[dst + OCCUPANCY_WORDS + i] = atomicLoad(&wg_colors[i]);
