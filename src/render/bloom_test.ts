@@ -12,12 +12,20 @@ function assert(cond: boolean, what: string): void {
 }
 
 const NEAR = Deno.readTextFileSync("src/render/near.wgsl");
+const BIRDS = Deno.readTextFileSync("src/render/birds.wgsl");
 
 Deno.test("the near shader has both entry points, and the bloom one emits the fogged glow", () => {
   assert(/@fragment\s+fn fs\(/.test(NEAR), "fs is gone");
   assert(/@fragment\s+fn fs_bloom\(/.test(NEAR), "fs_bloom is gone; the bloom pipeline has no entry point");
   assert(/@location\(1\)\s+glow/.test(NEAR), "fs_bloom no longer writes location 1, which is bloom's source");
   assert(/exp\(-dist \* FOG_DENSITY\)/.test(NEAR), "the glow output is no longer fogged with the surface");
+});
+
+Deno.test("the bird shader has a bloom entry point that writes no glow, so a bird covers what is under it", () => {
+  assert(/@fragment\s+fn fs\(/.test(BIRDS), "fs is gone");
+  assert(/@fragment\s+fn fs_bloom\(/.test(BIRDS), "fs_bloom is gone; the bloom bird pipeline has no entry point");
+  assert(/@location\(1\)\s+glow/.test(BIRDS), "fs_bloom no longer writes location 1, which is bloom's source");
+  assert(/vec4f\(0\.0, 0\.0, 0\.0, 1\.0\)/.test(BIRDS), "a bird's glow output is no longer zero");
 });
 
 Deno.test("bloom's three pipelines build", async () => {

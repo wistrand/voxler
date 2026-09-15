@@ -146,9 +146,27 @@ fn vs(@builtin(vertex_index) vertex: u32, @builtin(instance_index) instance: u32
   return out;
 }
 
-@fragment
-fn fs(in: VsOut) -> @location(0) vec4f {
+fn shade(in: VsOut) -> vec4f {
   let lit = in.tint * surface_light(in.normal);
   let dist = length(in.view);
   return vec4f(apply_fog(lit, in.view / max(dist, 1e-5), dist), 1.0);
+}
+
+@fragment
+fn fs(in: VsOut) -> @location(0) vec4f {
+  return shade(in);
+}
+
+// With bloom on the pass has the emission source as a second target, and a bird writes
+// nothing to it: it does not glow, and it is in front of whatever does. Without this the
+// glow the near pass put there stays under the bird and blooms through it, and a bird
+// over a glowcap reads as see-through (src/render/bloom.ts).
+struct BloomOut {
+  @location(0) color: vec4f,
+  @location(1) glow: vec4f,
+}
+
+@fragment
+fn fs_bloom(in: VsOut) -> BloomOut {
+  return BloomOut(shade(in), vec4f(0.0, 0.0, 0.0, 1.0));
 }

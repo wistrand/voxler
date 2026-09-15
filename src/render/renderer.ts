@@ -31,7 +31,7 @@ import type { WorldProgram } from "../worlds/index.ts";
 import { CAMERA_UNIFORM_SIZE, CameraUniform } from "./camera-uniform.ts";
 import { runDrawTest } from "./draw-test.ts";
 import { NearField, type NearFieldOptions } from "./near-field.ts";
-import { Bloom } from "./bloom.ts";
+import { Bloom, BLOOM_FORMAT } from "./bloom.ts";
 
 const DEPTH_FORMAT: GPUTextureFormat = "depth32float";
 const GRID_RADIUS = 8; // chunks each side of the camera chunk
@@ -359,7 +359,8 @@ export class Renderer {
     // or not there are meshes: `?mesh=0` leaves the sky, and birds are still in it.
     this.birdDescriptor = {
       label: "birds",
-      colorAttachments: [this.nearBColor],
+      // The bloom source too, so a bird covers the glow under it (`fs_bloom` in birds.wgsl).
+      colorAttachments: this.bloom ? [this.nearBColor, this.bloom.sourceLoad] : [this.nearBColor],
       depthStencilAttachment: this.nearBDepth,
     };
     this.colorAttachment = {
@@ -556,7 +557,11 @@ export class Renderer {
         label: "birds",
         layout: device.createPipelineLayout({ label: "birds", bindGroupLayouts: [this.frameLayout, read] }),
         vertex: { module: birdsModule, entryPoint: "vs" },
-        fragment: { module: birdsModule, entryPoint: "fs", targets: [{ format }] },
+        fragment: {
+          module: birdsModule,
+          entryPoint: this.bloom ? "fs_bloom" : "fs",
+          targets: this.bloom ? [{ format }, { format: BLOOM_FORMAT }] : [{ format }],
+        },
         depthStencil: { format: DEPTH_FORMAT, depthWriteEnabled: true, depthCompare: "greater" },
       }, report);
       if (!birds) return false;
