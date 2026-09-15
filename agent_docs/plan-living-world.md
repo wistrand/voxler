@@ -442,7 +442,14 @@ reads as a mushroom is a stem two to three times the cap's radius, a dome cut of
 its equator so it is a cap and not a ball on a stick, and a thin lip a little wider than
 the dome. Small ones come up in clumps of one to three around a spot, sharing the cell's
 species colour; the first clumps of three everywhere carpeted the floor, so the lattice
-went from 30 voxels to 44 and the hit rate from 67% to 22%.
+went from 30 voxels to 44 and the hit rate from 67% to 22%. The stem glows too, since
+2026-09-15: a warm cream (`shroomstem` emission 0.40, `light` 9 in `src/world/blocks.ts`)
+well under the caps, so a mushroom is lit from the ground up rather than a lantern on a
+pale post, and a giant's foot has light on the ground around it where the cap's own
+level (13, falling by one a voxel) never arrived. It costs about 1% of the grove's quads
+through the light's merge key, 2,028,391 to 2,049,385, and nothing visible in the near
+draw (`gpu.near.a` 1.05 ms p50 in `grove.20260915T1431*` against 0.92 and 1.18 in
+`grove.20260915T0718*`).
 
 **Shadows reuse the clipmap rather than a shadow map.** The far field already keeps a
 brickmap of the world around the camera with empty-space skipping, so a shadow ray is a

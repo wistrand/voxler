@@ -482,7 +482,7 @@ species, falls and a different scatter and its spawn moved to 188
 
 | Metric                                     | Target                                  | Measured                                        |
 | ------------------------------------------ | --------------------------------------- | ----------------------------------------------- |
-| Frame time, dev machine (Arc B390, 120 Hz) | under 8.3 ms (hold 120 Hz)              | flyover misses 46 frames of 1151 since the far field went full resolution; spin, cave and teleport held it when last run (interval p99 8.34); the grove misses 12 of 1425 |
+| Frame time, dev machine (Arc B390, 120 Hz) | under 8.3 ms (hold 120 Hz)              | flyover misses 46 frames of 1151 since the far field went full resolution; spin, cave and teleport held it when last run (interval p99 8.34); the grove missed 12 of 1425 on 09-13 and 66 to 113 of about 1300 on 09-15, the far-field build having drifted up (below) |
 | GPU per frame, flyover                     | under 8.3 ms                            | 6.3 ms (sum of pass p50s, 20:15 run; 4.0 before the full-resolution march); spin 4.5, cave 3.8, teleport 2.5, all from 18:35. Since 2026-09-15 the far march is 1.2 to 1.7 ms of that instead of 2.5 to 2.9 (`flyover.20260915T0718*` against `flyover.20260914T1303*`) |
 | Frame time, integrated GPU (Apple silicon) | under 16.7 ms                           | met: an M3 on macOS 26.4.1 (Chrome 152, `apple / metal-3`) holds its 60 Hz panel with 0 missed frames in both flyover and grove; CPU frame 1.18 and 0.47 p50. Its pass timings are not comparable to the rows above ([gotchas.md](agent_docs/gotchas.md) "GPU pass timings do not mean the same thing on an Apple GPU") |
 | Frame time, discrete GPU                   | under 7 ms                              | unmeasured, no hardware                         |
@@ -541,8 +541,10 @@ away here:
   p50 over two flyover runs (against 2.88 and 2.49 the day before on the same code
   otherwise, `flyover.20260915T071807Z` against `flyover.20260914T130329Z`) and the
   grove's from 1.38 to 0.98 and 1.05 (`grove.20260915T0718*` against
-  `grove.20260913T091555Z`), with the grove's missed frames 12 of 1425 to 1 and 2 of
-  about 900, and its far-field p99 4.65 to 1.7 and 2.0. The near draw moved with it, 1.25
+  `grove.20260913T091555Z`), and its far-field p99 4.65 to 1.7 and 2.0 (those runs' 1 and
+  2 missed frames say nothing: the panel was at 60 Hz that morning, see
+  [gotchas.md](agent_docs/gotchas.md) "Missed frames are counted against whatever the
+  panel is doing"). The near draw moved with it, 1.25
   to 0.92 and 1.18 p50 in the grove, because shadow rays walk the same bricks; that one
   is inside run-to-run noise on the flyover and is not claimed there.
 - **CPU frame p99**, 3.7 ms in the flyover and 5.3 in the teleport against a 2 ms target.
@@ -551,8 +553,12 @@ away here:
 - **The grove bench's far-field build spikes.** 4.98 ms p50 and 19.2 p99 in a world an
   order richer than terrain, which is what missed 12 frames of 1425
   (`grove.20260913T091555Z`); `?farSlabs=1` trades the p99 for a slower catch-up. The
-  2026-09-15 runs read 4.5 and 5.0 p50, 9.2 and 10.3 p99, and miss 1 and 2 frames: the
-  march got cheaper, the build did not. Two
+  2026-09-15 morning runs read 4.5 and 5.0 p50, 9.2 and 10.3 p99, and the afternoon's
+  5.2 to 6.9 p50 and 14 to 16 p99 with nothing changed under it: the march got cheaper,
+  the build did not, and it swings a couple of milliseconds between runs. At 120 Hz that
+  is now what the grove misses: 66 and 113 frames of about 1300 (`grove.20260915T1430*`,
+  `T1431*`; bloom on, the stems glowing, 2,049,385 quads against 2,028,391), where the
+  09-13 run's 12 of 1425 sat under the budget by a few tenths. Two
   earlier readings of this scene were wrong in opposite directions and both are recorded:
   runs that walked underground ([gotchas.md](agent_docs/gotchas.md) "The grove bench
   walked 44 voxels underground") and runs that started before the world was built

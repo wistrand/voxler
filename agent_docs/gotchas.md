@@ -148,6 +148,14 @@ disproved, drop the marker or correct the entry. Append new traps as they are hi
   cull check's textures (plan-rendering phase 4) and once on the translucent draw
   arguments (phase 5). Give any buffer or texture a test might read `COPY_SRC` when
   it is created.
+- **Missed frames are counted against whatever the panel is doing.** `missedFrames` is
+  frames longer than the display's interval, and the dev machine's panel moves between
+  60 and 120 Hz on its own (a run at 16.7 ms `interval` p50 and the next at 8.3, on the
+  same code, `grove.20260915T143108Z` against `T143122Z`). At 60 Hz a 9 ms GPU frame
+  misses nothing; at 120 Hz it misses every frame. Read `interval.p50` before comparing
+  missed counts across runs, and never quote a missed count without the rate it was
+  counted at. A morning of grove runs reading "1 and 2 missed" against "12 of 1425" was
+  60 Hz against 120, and said nothing.
 - **GPU pass timings drift between bench runs, and the control-line trick does not
   rescue them.** In one sitting `gpu.hiz` (identical work every frame) read 0.137 to
   0.252 ms across four flyover runs, so an effect under about 0.3 ms of GPU total

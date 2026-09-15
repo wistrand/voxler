@@ -143,7 +143,11 @@ export const BLOCKS: readonly BlockType[] = [
     color: [0.86, 0.83, 0.74],
     opaque: true,
     texture: ["shroomstem", "shroomstem", "shroomstem"],
-    emission: [0.10, 0.10, 0.08], // the stem catches a little of its own cap's light
+    // The stem glows too, a warm cream well under the caps, so a mushroom is lit from
+    // the ground up rather than a lantern on a pale post; and it lights the ground at
+    // its foot, which a giant's cap is too far above to reach.
+    emission: [0.40, 0.40, 0.34],
+    light: 9,
   },
   { id: 17, name: "bark", color: [0.34, 0.24, 0.17], opaque: true, texture: ["bark", "bark", "bark"] },
   // Ferns sway further than a canopy does: they are fronds, not branches.
