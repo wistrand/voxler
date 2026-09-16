@@ -11,6 +11,7 @@ import { FlyControls } from "./camera/controls.ts";
 import { ease, Follow, type FollowState, raiseHeight } from "./camera/follow.ts";
 import { Hud, type HudButton } from "./debug/hud.ts";
 import { collectMark, saveMark } from "./debug/mark.ts";
+import { Orbits } from "./brush/orbit.ts";
 import { Overlay } from "./debug/overlay.ts";
 import { CPU_FRAME, CPU_RENDER, CPU_UPDATE, Stats } from "./debug/stats.ts";
 import { formatCaps } from "./gpu/caps.ts";
@@ -185,6 +186,7 @@ const world: WorldProgram = {
   start: opts.world.start,
   sky: opts.world.sky,
   birds: opts.world.birds,
+  orbits: opts.world.orbits ?? undefined,
 };
 const renderSize = opts.render.size;
 const bench = benchSession();
@@ -274,7 +276,13 @@ let brushDirty = new Float64Array(256);
 let farEdits: FarEdits | null = null;
 const FAR_EDIT_JOBS_PER_FRAME = 2;
 
+// The orbiting brushes (`orbits` in the world entry): stepped every frame before the
+// dirty chunks are collected, so a move lands in the same frame's regeneration.
+const orbits = world.orbits && app.orbit ? new Orbits(brushes, world.orbits.centre, world.orbits.orbiters) : null;
+let orbiting = orbits !== null;
+
 function applyBrushEdits(): void {
+  if (orbits !== null && orbiting) orbits.update(performance.now() / 1000);
   const n = brushes.dirty;
   if (n === 0) return;
   if (brushDirty.length < n) brushDirty = new Float64Array(n * 2);
@@ -345,7 +353,9 @@ if (mesher) {
   streamer.listener = {
     stored(key: number, urgent: boolean) {
       mesher.stored(key, urgent);
-      if (farEdits !== null && hasChunkOps(brushes, key)) farEdits.markDirty(key);
+      // A regenerated chunk's far bricks follow it too, or a moved brush's shadow stays
+      // where the brush was.
+      if (farEdits !== null && (urgent || hasChunkOps(brushes, key))) farEdits.markDirty(key);
     },
     evicted(key: number) {
       mesher.evicted(key);
@@ -1261,6 +1271,14 @@ const hud = new Hud(document.body, [
     on: () => following || chasing,
     press: toggleFollow,
   },
+  ...(orbits === null ? [] : [{
+    label: "orbit",
+    title: "The orbiting brushes: on, they move and the chunks they cross regenerate (?orbit=0 starts them still)",
+    on: () => orbiting,
+    press: () => {
+      orbiting = !orbiting;
+    },
+  }]),
   {
     label: "mark",
     title: "Click something that looks wrong and the engine writes down what it is (marks/)",

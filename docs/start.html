@@ -444,6 +444,18 @@ voxler.edit.fillSphere(x, y, z, r, id);</code></pre>
   bubble or on the ground names the municipality and opens its numbers.
 </p>
 
+<h3>Something that moves</h3>
+
+<p>
+  A world function takes no time: a chunk is voxelized once. What moves is a brush. A world
+  can declare <code>orbits</code>, CSG spheres on circles that the engine steps every frame
+  through <code>BrushStore.move()</code>, regenerating the chunks each one crosses; the
+  showcase has six. <code>voxler.orbits</code> holds them and <code>voxler.orbiting = false</code>
+  holds them still. For a motion of your own, move any brush the same way:
+  <code>voxler.brushes.move(id, x, y, z)</code> on the id <code>csgSphere</code> returned, and
+  budget a few regenerated chunks a frame per moving brush.
+</p>
+
 <h2>Changing a world after it is running</h2>
 
 <p>

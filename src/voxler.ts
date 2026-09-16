@@ -31,6 +31,7 @@ import { csgOne } from "./brush/build.ts";
 import { BLEND_UNION, BRUSH_CSG, PRIM_SPHERE } from "./brush/format.ts";
 import { BrushStore } from "./brush/store.ts";
 import { EditTool } from "./brush/tool.ts";
+import { Orbits } from "./brush/orbit.ts";
 import { fillBox, fillSphere, hasChunkOps, packChunkOps, setVoxel } from "./brush/voxel-ops.ts";
 import { CPU_FRAME, CPU_RENDER, CPU_UPDATE, Stats } from "./debug/stats.ts";
 import { DEFAULT_ADAPT_OPTIONS, FarAdapt } from "./far/adapt.ts";
@@ -126,6 +127,10 @@ export class Voxler {
   readonly streamer: ChunkStreamer;
   readonly brushes = new BrushStore();
   readonly tool: EditTool;
+  // The world's orbiting brushes, when it has them (`orbits` in the world entry); null
+  // otherwise. Set `orbiting` false to hold them still.
+  readonly orbits: Orbits | null;
+  orbiting = true;
   readonly controls: FlyControls | null;
   mesher: MeshScheduler | null = null;
   gpu: Gpu | null = null;
@@ -227,6 +232,8 @@ export class Voxler {
     this.fieldBrushes = new BrushBatch(this.brushes);
     this.brushGrid = new BrushGrid(this.brushes);
     this.tool = new EditTool(this.brushes);
+    const orbits = o.world.orbits;
+    this.orbits = orbits ? new Orbits(this.brushes, orbits.centre, orbits.orbiters) : null;
 
     if (o.meshing) this.mesher = new MeshScheduler(this.store, this.pool, o.mesh);
 
@@ -258,7 +265,9 @@ export class Voxler {
     this.streamer.listener = {
       stored: (key: number, urgent: boolean) => {
         this.mesher?.stored(key, urgent);
-        if (this.farEdits !== null && hasChunkOps(this.brushes, key)) this.farEdits.markDirty(key);
+        // A regenerated chunk's far bricks follow it too, or a moved brush's shadow
+        // stays where the brush was.
+        if (this.farEdits !== null && (urgent || hasChunkOps(this.brushes, key))) this.farEdits.markDirty(key);
       },
       evicted: (key: number) => this.mesher?.evicted(key),
     };
@@ -632,6 +641,7 @@ export class Voxler {
   }
 
   private applyBrushEdits(): void {
+    if (this.orbits !== null && this.orbiting) this.orbits.update(performance.now() / 1000);
     const n = this.brushes.dirty;
     if (n === 0) return;
     if (this.brushDirty.length < n) this.brushDirty = new Float64Array(n * 2);

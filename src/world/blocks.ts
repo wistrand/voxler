@@ -305,6 +305,14 @@ export const BLOCK_TRANSLUCENT: Uint8Array = (() => {
   return table;
 })();
 
+// A block's id by name, for the places that name one in TypeScript (a world entry's
+// brushes). Throws on a name the table lacks: a typo here would place air.
+export function blockId(name: string): number {
+  const b = BLOCKS.find((b) => b.name === name);
+  if (b === undefined) throw new Error(`no block named ${name}`);
+  return b.id;
+}
+
 // The fluid a block belongs to, as a small number, 0 for none (`fluid` above).
 export const BLOCK_FLUID: Uint8Array = (() => {
   const table = new Uint8Array(65536);

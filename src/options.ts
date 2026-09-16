@@ -17,6 +17,7 @@
 // a claim (`src/options_test.ts`).
 
 import { MAX_LEVELS, DEFAULT_CLIPMAP_OPTIONS, levelsForReach } from "./far/clipmap.ts";
+import type { WorldEntry } from "./worlds/index.ts";
 import { DEFAULT_FAR_SCALE } from "./far/far-field.ts";
 import { CLUSTER_QUADS, ORDER_EMISSION, ORDER_MORTON } from "./mesh/cluster.ts";
 import { CULL_ALL, DEFAULT_NEAR_OPTIONS } from "./render/near-field.ts";
@@ -46,6 +47,8 @@ export interface WorldSource {
   readonly birds?: boolean;
   // Bloom over its glowing blocks by default; `render.bloom` overrides it either way.
   readonly bloom?: boolean;
+  // Brushes that move about the world (`orbits` in `src/worlds/index.ts`).
+  readonly orbits?: WorldEntry["orbits"];
 }
 
 export interface CameraOptions {
@@ -145,6 +148,7 @@ export interface ResolvedOptions {
     readonly look?: readonly [number, number];
     readonly sky: Sky;
     readonly birds: boolean;
+    readonly orbits: WorldEntry["orbits"] | null;
   };
   readonly camera: { readonly at: readonly [number, number, number]; readonly yaw: number; readonly pitch: number };
   readonly workers: { readonly count: number; readonly jobsPerMessage: number; readonly factory?: (index: number) => Worker };
@@ -253,6 +257,7 @@ export function resolveOptions(options: VoxlerOptions): ResolvedOptions {
       look: world.look,
       sky,
       birds: (options.birds ?? world.birds) === true,
+      orbits: world.orbits ?? null,
     },
     camera: {
       at: options.camera?.at ?? start,

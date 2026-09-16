@@ -88,6 +88,16 @@ field's clipmap what is under them, which is the same occupancy the shadow rays 
 `?far=0` takes that away with the shadows. Clicking one picks it out (amber, and a line in
 the on-screen panel); clicking nothing clears it; and with one picked, the follow switch
 chases it instead of the ground.
+The other thing that moves is a brush: the showcase carries six CSG spheres on circles
+about the origin (`orbits` in `src/worlds/index.ts`, `src/brush/orbit.ts`), four
+materials riding on the floor, a glass one smooth-blended into it and a subtract that
+carves a pit the floor heals behind. The world function stays pure; the brush record
+moves through `BrushStore.move()` and the chunks it leaves and enters are regenerated,
+their far-field bricks with them, so shadows follow. At their speeds (5 to 10 voxels a
+second each) that is about 190 chunks a second through the voxelizer and the mesher,
+which costs the main thread 2.1 ms a frame against 0.6 with them held still
+(`?orbit=0`, or the panel's `orbit` switch); twice the speed was 600 a second and lost
+frames.
 A world opts in with `birds` in `src/worlds/index.ts` (and into bloom with `bloom`, the
 same way) and pays one more pipeline and two
 more passes for it; the passes cost under the GPU timer's resolution. What those cost to get
@@ -262,7 +272,7 @@ draws flat block colors instead of sampling the block textures; `?glow=0` drops 
 emission, `?wind=0` holds swaying blocks still, `?light=0` meshes and draws without block
 light and `?shadow=0` stops marching shadow rays; `?sky=<day|night|desert|space|map>` overrides the
 world's own sky and lighting preset (`src/render/sky.ts`); `?birds=0` turns the bird flock off in a world
-that has one; `?gizmo=0` starts without the axis cross in the corner, which is what a
+that has one; `?orbit=0` holds a world's orbiting brushes still; `?gizmo=0` starts without the axis cross in the corner, which is what a
 screenshot wants; `?bloom=1` and `?bloom=0` bloom the glowing blocks or not (the world's
 own default otherwise, `bloom` in `src/worlds/index.ts`: on in the forest, off elsewhere.
 The near pass writes its fogged emission to a second attachment and `src/render/bloom.ts`
@@ -297,7 +307,7 @@ screen is forward, across is a strafe) and the deflection is analog, and spreadi
 closing them is the wheel. The second finger landing ends the look, because a gesture
 that turns and flies at once cannot be aimed. On-screen: a small panel top right with the frame rate, the switches worth reaching for
 (sky, far field, shadows, bloom, meshes, SDF preview, chunk grid, the axis cross, the
-follow flyover, marking, the debug overlay), a line of what the world is currently holding (resident chunks and the voxels
+follow flyover, the orbiting brushes where the world has them, marking, the debug overlay), a line of what the world is currently holding (resident chunks and the voxels
 they stand for, quads, clusters drawn against clusters live, far-field bricks) and, while
 a world is still compiling its pipelines, which stages are outstanding. The counts are
 built on the panel's own quarter-second tick, never in the frame path. The switches that are compiled into the shaders (the sky, shadows and bloom) reload
@@ -703,10 +713,15 @@ away here:
   not drawn. A chunk is voxelized once and a brick sampled once, so a position that depends
   on time would put every chunk it crosses back through the voxelizer every frame; the two
   kinds of motion a block has (`sway` in the vertex stage, `flow` in the texture) animate a
-  thing that stays where it is. The birds are the only thing on the other side of that line
-  so far (`src/render/birds-common.wgsl`), and what it costs them is everything the world
+  thing that stays where it is. The birds are on the other side of that line
+  (`src/render/birds-common.wgsl`), and what it costs them is everything the world
   gives a block for free: no chunk, no brick, no block id, no shadow, no place in the far
-  field, and a state buffer of their own to keep between frames.
+  field, and a state buffer of their own to keep between frames. The third way is a
+  brush that moves (`src/brush/orbit.ts`): it is voxelized, so it has all of that, and
+  what it costs is regenerating every chunk its box crosses each time it moves a voxel,
+  which bounds how many can move and how fast (the showcase's six at 5 to 10 voxels a
+  second are 190 chunks a second). Never animate a world function with time; move a
+  brush.
 - Whether a placed object exists, what kind it is and how big it is are properties of the
   *object*, so read the world at the object's own base, never at the point being shaded.
   A world function sees one point at a time; a test that varies across a tree's own

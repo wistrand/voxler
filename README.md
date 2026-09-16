@@ -58,7 +58,10 @@ vertex pulling, and continue past the meshed radius as a ray-marched brickmap th
 reaches as far as the fog lets the eye see. Surfaces carry baked ambient occlusion and
 baked light from glowing blocks, and cast shadows from the sun or moon; a world can ask
 for bloom over its glowing blocks, and the forest does. Voxels can be
-edited and the edits survive the chunk being regenerated. A ray-traced preview of the
+edited and the edits survive the chunk being regenerated, which is also how a thing
+moves through the ground: the showcase has six brushes of different materials orbiting
+its floor, one carving a pit that heals behind it, each regenerating the chunks it
+crosses as it goes. A ray-traced preview of the
 same world is one key away, though for a heavy world it takes a while to compile the
 first time.
 

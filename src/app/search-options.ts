@@ -157,6 +157,7 @@ export interface AppSwitches {
   // regeneration, and not the streamer's own budget for chunks an edit has changed.
   readonly regen: number;
   readonly at: readonly [number, number, number] | null;
+  readonly orbit: boolean;
 }
 
 export function appSwitches(params: URLSearchParams): AppSwitches {
@@ -170,6 +171,8 @@ export function appSwitches(params: URLSearchParams): AppSwitches {
     farCheck: params.has("farCheck"),
     regenCheck: params.has("regenCheck"),
     regen: Math.max(0, Math.min(1024, intOf(params, "regen") ?? 0)),
+    // `?orbit=0` holds a world's orbiting brushes still (they are on by default).
+    orbit: flag(params, "orbit") !== false,
     at: at && at.length === 3 && at.every(Number.isFinite) ? [at[0], at[1], at[2]] : null,
   };
 }

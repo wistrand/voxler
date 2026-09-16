@@ -500,6 +500,28 @@ bounding box rather than dropping out, so brushes coarsen instead of blinking ou
 Library noise drops octaves finer than the footprint and caves drop out entirely, but
 caves are a zero crossing with nothing to stand in for them; a brush has a box.
 
+## Animation: a brush that moves
+
+Landed 2026-09-16. The store's `move()` was written as the path animation takes and
+nothing took it until the showcase's orbiting brushes (`src/brush/orbit.ts`, `orbits`
+in `src/worlds/index.ts`): six CSG spheres on circles about the origin, stepped every
+frame, moved only when the cell they round to changes, so a frame's regeneration is the
+chunks the boxes of the brushes that crossed a voxel boundary span. Four are union
+brushes of different materials riding on the floor, one a glass sphere smooth-blended
+into it, one a subtract carving a pit the floor heals behind. The far field follows
+because a regenerated chunk now marks its bricks dirty for the edit overlay whether or
+not it holds voxel ops (`urgent` in the streamer's `stored` callback), so the shadow
+moves with the brush rather than staying where the brush was at the last slab build.
+
+Measured on the dev machine in the showcase at the spawn: at 5 to 10 voxels a second
+each, about 190 chunks a second regenerate, `cpu.frame` 2.1 ms p50 against 0.6 with them
+held still (`?orbit=0`), GPU passes unchanged; at twice the speed, 600 chunks a second
+and 56 fps. The cost is the chunk granularity: a 10-voxel sphere's padded box spans up
+to eight chunks, and every one of them goes back through the voxelizer and the mesher
+for a one-voxel move. That is the bound on how much of a world can move this way, and
+it is why the world function itself must never take time (CLAUDE.md "Anything that
+travels is drawn").
+
 ## Open questions
 
 - **Journal growth.** The journal is the source of truth and chunks are a cache, so

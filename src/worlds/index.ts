@@ -7,6 +7,9 @@ import monument from "./monument.wgsl" with { type: "text" };
 import showcase from "./showcase.wgsl" with { type: "text" };
 import terrain from "./terrain.wgsl" with { type: "text" };
 import type { Sky } from "../render/sky.ts";
+import type { OrbitSpec } from "../brush/orbit.ts";
+import { BLEND_SMIN, BLEND_SUBTRACT } from "../brush/format.ts";
+import { blockId } from "../world/blocks.ts";
 
 export interface WorldEntry {
   readonly code: string;
@@ -38,6 +41,10 @@ export interface WorldEntry {
   // glowcaps at night wants it; a daylight world has nothing to bloom. `?bloom=` still
   // wins over it.
   readonly bloom?: boolean;
+  // Brushes that move: CSG spheres on circles about `centre`, stepped every frame
+  // (`src/brush/orbit.ts`). The world function stays pure; the brush records move and
+  // the chunks they cross are regenerated. `?orbit=0` holds them still.
+  readonly orbits?: { readonly centre: readonly [number, number, number]; readonly orbiters: readonly OrbitSpec[] };
 }
 
 export interface WorldProgram {
@@ -50,6 +57,7 @@ export interface WorldProgram {
   readonly sky: Sky;
   readonly far?: WorldEntry["far"];
   readonly birds?: boolean;
+  readonly orbits?: WorldEntry["orbits"];
 }
 
 export const WORLDS: Readonly<Record<string, WorldEntry>> = {
@@ -100,7 +108,30 @@ export const WORLDS: Readonly<Record<string, WorldEntry>> = {
     // one of them and none of them is empty.
     far: { levels: 7 },
   },
-  showcase: { code: showcase, spawn: [16, 12, 48] },
+  // The showcase also carries the moving-brush demo: six spheres on circles round the
+  // origin, outside the objects (which reach 41 on x) and inside the pillars (90 out),
+  // each folded in its own way. Four are materials that ride on the floor, one is
+  // glass smooth-blended into it, one is a subtract that carves a pit the floor
+  // heals behind. Low enough to plough the ground, so the regeneration shows.
+  showcase: {
+    code: showcase,
+    spawn: [16, 12, 48],
+    orbits: {
+      centre: [0, 0, 0],
+      orbiters: [
+        // Periods of 40 to 70 seconds: 5 to 10 voxels a second each, about two brush
+        // moves a second between them, and each move regenerates the chunks the
+        // brush's box spans (up to eight). Twice as fast held 56 fps on the dev machine
+        // with the voxelizer busy on 600 chunks a second; this holds the frame.
+        { material: blockId("stone"), radius: 5, orbit: 54, height: 3, period: 48 },
+        { material: blockId("brick"), radius: 4, orbit: 62, height: 2, period: -60, phase: Math.PI / 2 },
+        { material: blockId("sand"), radius: 6, orbit: 50, height: 4, period: 70, phase: Math.PI },
+        { material: blockId("glowcap"), radius: 3, orbit: 68, height: 7, period: 40, phase: Math.PI * 1.5 },
+        { material: blockId("glass"), radius: 5, orbit: 58, height: 3, period: -44, phase: 0.7, blend: BLEND_SMIN, k: 4 },
+        { material: blockId("stone"), radius: 5, orbit: 46, height: -1, period: 56, phase: 2.4, blend: BLEND_SUBTRACT },
+      ],
+    },
+  },
   terrain: { code: terrain, spawn: [16, 140, 48] }, // surface near the origin is about 75
 };
 
