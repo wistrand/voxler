@@ -173,8 +173,15 @@ API; the demo must run exactly as it does now, every URL switch included.
 - [x] `src/voxler.ts`: the `Voxler` class. Takes a canvas and `VoxlerOptions`, builds the
       GPU, renderer, store, streamer, mesher, pool, brushes and far edits, owns the frame
       loop and the device-loss restart, and has `start`, `stop`, `frame`, `resize` and
-      `dispose`. The seam to a host is five callbacks (`VoxlerHooks`): `onError`,
-      `onUnsupported`, `onCompiling`, `onReady`, `update`, `afterFrame`.
+      `dispose`. The seam to a host is the callbacks in `VoxlerHooks`: `onError`,
+      `onUnsupported`, `onCompiling`, `onReady`, `update`, `afterFrame`, and `onClick`,
+      a pointer that went down and came up in place with no second pointer meanwhile
+      (a drag is a look, two fingers are a flight). `pick(x, y)` answers what is under
+      a point: the voxel the chunk store holds there, or past the meshed chunks the
+      cell the far field's march meets, as a position, a size, a block and a face
+      normal (`PickHit`). The far answer is the `probe_far` compute probe the `mark`
+      switch also uses, built on the first ask; the election map (`docs/sweden-2026.html`)
+      is the first host of both.
 - [x] `voxler` is its own build entry, so `dist/voxler.js` is the engine with the WGSL
       inlined and no demo in it. 409 KiB.
 - [x] `FlyControls.dispose()`, which did not exist: two of its listeners are on the window

@@ -5,11 +5,12 @@
 // Opaque faces (meshReference): the voxel is opaque and the voxel across the face is
 // not (inside the chunk, or in the neighbor plane on the border).
 // Translucent faces (meshReferenceTranslucent, plan-meshing phase 6): the voxel is
-// translucent and the voxel across the face is neither opaque nor the same id. On
+// translucent and the voxel across the face is neither opaque nor the same id (nor the
+// same fluid, `sameFluid` in blocks.ts). On
 // the border, opacity comes from the planes and the id from the border ids (null:
 // never the same id).
 
-import { BLOCK_OPAQUE, BLOCK_TRANSLUCENT } from "../world/blocks.ts";
+import { BLOCK_OPAQUE, BLOCK_TRANSLUCENT, sameFluid } from "../world/blocks.ts";
 import { CHUNK_VOLUME, voxelIndex } from "../world/coords.ts";
 import { BORDER_IDS, planeBit } from "./planes.ts";
 import { encodeWord0, encodeWord1, FACE_AXIS, FACE_COUNT, FACE_SIGN, FACE_U, FACE_V, type Mesh } from "./quad.ts";
@@ -45,11 +46,11 @@ function referenceMesh(ids: Uint16Array, planes: Uint32Array, borders: Uint16Arr
         p[axis] = n;
         const across = ids[voxelIndex(p[0], p[1], p[2])];
         p[axis] = saved;
-        covered = BLOCK_OPAQUE[across] === 1 || (translucent && across === id);
+        covered = BLOCK_OPAQUE[across] === 1 || (translucent && sameFluid(across, id));
       } else {
         const u = p[FACE_U[face]], v = p[FACE_V[face]];
         covered = planeBit(planes, face, u, v) ||
-          (translucent && borders !== null && borders[face * BORDER_IDS + v * 32 + u] === id);
+          (translucent && borders !== null && sameFluid(borders[face * BORDER_IDS + v * 32 + u], id));
       }
       if (covered) continue;
       if (count * 2 + 2 > quads.length) {

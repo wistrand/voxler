@@ -21,6 +21,10 @@
 
 import { FlyCamera } from "./camera/camera.ts";
 import { FlyControls } from "./camera/controls.ts";
+import { decodeRayProbe } from "./far/probe.ts";
+import { FACE_AXIS, FACE_SIGN } from "./mesh/quad.ts";
+import { BLOCKS } from "./world/blocks.ts";
+import { newRayHit, type RaycastOptions, raycastVoxels } from "./world/raycast.ts";
 import { BrushBatch } from "./brush/batch.ts";
 import { BrushGrid } from "./brush/grid.ts";
 import { csgOne } from "./brush/build.ts";
@@ -82,7 +86,34 @@ export interface VoxlerHooks {
   update?: (dt: number, now: number) => void;
   // The frame is over and the stats are closed. For a host that draws its own overlay.
   afterFrame?: (now: number, interval: number) => void;
+  // A click on the view: a pointer that went down and came up within a few pixels, with
+  // no second pointer down meanwhile. A drag is a look and a two-finger gesture is a
+  // flight, and neither is a click. `pick(x, y)` says what is under it.
+  onClick?: (clientX: number, clientY: number, event: PointerEvent) => void;
 }
+
+// What `Voxler.pick()` found under a point on the view.
+export interface PickHit {
+  // The min corner of what was hit, in world voxels: a voxel, or for a hit past the
+  // meshed chunks a far-field cell `size` voxels wide, which is as fine as the far field
+  // knows at that distance.
+  readonly position: readonly [number, number, number];
+  readonly size: number;
+  readonly block: number; // the block id, and its name in BLOCKS
+  readonly name: string;
+  // The face the ray came in through, as an outward unit vector, or zero when the
+  // far field could not say (a ray that began inside the cell's level).
+  readonly normal: readonly [number, number, number];
+  readonly distance: number; // from the eye, in voxels
+  readonly far: boolean; // answered by the far field's march rather than the chunk store
+}
+
+// A click moves less than this between down and up; further is a drag.
+const CLICK_SLOP_PX = 5;
+// How far a pick's ray walks the chunk store before asking the far field. The store
+// holds nothing past the stream radius, so this is only a bound on the walk.
+const PICK_RAYCAST: RaycastOptions = { maxDistance: 1024, opaqueOnly: false };
+const BLOCK_NAMES = new Map(BLOCKS.map((b) => [b.id, b.name]));
 
 export class Voxler {
   readonly canvas: HTMLCanvasElement;
@@ -124,6 +155,36 @@ export class Voxler {
   private sizeDirty = true;
   private sizedRenderer: Renderer | null = null;
   private resizeObserver: ResizeObserver | null = null;
+  // Click detection for `hooks.onClick`, and scratch for `pick()`.
+  private clickId = -1;
+  private pointersDown = 0;
+  private clickX = 0;
+  private clickY = 0;
+  private readonly pickDir = new Float64Array(3);
+  private readonly pickHit = newRayHit();
+  private readonly pointerDown = (e: PointerEvent): void => {
+    this.pointersDown++;
+    // A second pointer landing is a gesture, whichever of the two lifts first.
+    if (this.pointersDown > 1) {
+      this.clickId = -1;
+      return;
+    }
+    this.clickId = e.pointerId;
+    this.clickX = e.clientX;
+    this.clickY = e.clientY;
+  };
+  private readonly pointerUp = (e: PointerEvent): void => {
+    this.pointersDown = Math.max(0, this.pointersDown - 1);
+    if (e.pointerId !== this.clickId) return;
+    this.clickId = -1;
+    if (Math.hypot(e.clientX - this.clickX, e.clientY - this.clickY) > CLICK_SLOP_PX) return;
+    if (this.controls?.gesturing) return;
+    this.hooks.onClick?.(e.clientX, e.clientY, e);
+  };
+  private readonly pointerCancel = (): void => {
+    this.pointersDown = Math.max(0, this.pointersDown - 1);
+    this.clickId = -1;
+  };
 
   // Use `Voxler.create()`, which builds the device too. This only assembles the CPU side,
   // which is the part that survives device loss.
@@ -145,6 +206,11 @@ export class Voxler {
     this.camera.setPosition(o.camera.at[0], o.camera.at[1], o.camera.at[2]);
     this.camera.setOrientation(o.camera.yaw, o.camera.pitch);
     this.controls = o.controls ? new FlyControls(canvas, this.camera) : null;
+    // After the controls' own listeners, so a pointer they have counted off is counted
+    // off before the click is judged.
+    canvas.addEventListener("pointerdown", this.pointerDown);
+    canvas.addEventListener("pointerup", this.pointerUp);
+    canvas.addEventListener("pointercancel", this.pointerCancel);
 
     this.pool = new WorkerPool(o.workers.factory ?? defaultWorkerFactory, o.workers.count, o.workers.jobsPerMessage);
     this.pool.onError = (kind, key, message) => this.error(`job ${kind} ${key} failed: ${message}`);
@@ -339,6 +405,54 @@ export class Voxler {
 
   // Gives it all back: the loop, the workers, the device, the observer. Everything after
   // this is a no-op, so a host can call it from a teardown path that may run twice.
+  // What is under a point on the view, as client coordinates: the voxel the chunk store
+  // holds there, or past the meshed chunks the cell the far field's march meets, or
+  // null for sky. The far answer is a GPU probe and comes back a frame or so later; its
+  // pipeline is built on the first ask. Never call this in the frame path.
+  async pick(clientX: number, clientY: number): Promise<PickHit | null> {
+    const canvas = this.canvas;
+    const rect = canvas.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) return null;
+    // NDC over the canvas as it is displayed, and the aspect from the render target,
+    // which is what the projection used.
+    const aspect = canvas.height > 0 ? canvas.width / canvas.height : 1;
+    const ndcX = ((clientX - rect.left) / rect.width) * 2 - 1;
+    const ndcY = 1 - ((clientY - rect.top) / rect.height) * 2;
+    const dir = this.camera.rayThrough(ndcX, ndcY, aspect, this.pickDir);
+    const camera = this.camera;
+    const near = this.pickHit;
+    if (raycastVoxels(this.store, camera.worldPosition(0), camera.worldPosition(1), camera.worldPosition(2), dir[0], dir[1], dir[2], near, PICK_RAYCAST)) {
+      const normal: [number, number, number] = [0, 0, 0];
+      if (near.face >= 0) normal[FACE_AXIS[near.face]] = FACE_SIGN[near.face];
+      return {
+        position: [near.x, near.y, near.z],
+        size: 1,
+        block: near.id,
+        name: BLOCK_NAMES.get(near.id) ?? "",
+        normal,
+        distance: near.distance,
+        far: false,
+      };
+    }
+    const renderer = this.renderer;
+    if (renderer === null || !renderer.showFar) return null;
+    const words = await renderer.far.probeRay(ndcX, ndcY);
+    if (words === null) return null;
+    const probe = decodeRayProbe(words);
+    if (!probe.hit) return null;
+    const normal: [number, number, number] = [0, 0, 0];
+    if (probe.axis < 3) normal[probe.axis] = -Math.sign(probe.dir[probe.axis]);
+    return {
+      position: probe.world,
+      size: probe.cellVoxels,
+      block: probe.block,
+      name: BLOCK_NAMES.get(probe.block) ?? "",
+      normal,
+      distance: probe.t,
+      far: true,
+    };
+  }
+
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
@@ -350,6 +464,9 @@ export class Voxler {
     if (this.compiling !== 0) clearInterval(this.compiling);
     this.resizeObserver?.disconnect();
     this.resizeObserver = null;
+    this.canvas.removeEventListener("pointerdown", this.pointerDown);
+    this.canvas.removeEventListener("pointerup", this.pointerUp);
+    this.canvas.removeEventListener("pointercancel", this.pointerCancel);
     this.controls?.dispose?.();
     this.pool.terminate();
     this.gpu?.device.destroy();

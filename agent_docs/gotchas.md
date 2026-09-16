@@ -148,6 +148,17 @@ disproved, drop the marker or correct the entry. Append new traps as they are hi
   cull check's textures (plan-rendering phase 4) and once on the translucent draw
   arguments (phase 5). Give any buffer or texture a test might read `COPY_SRC` when
   it is created.
+- **A `const` array is compiled, not loaded, and the compile is superlinear.** A world
+  program that carries data (the election map's municipality raster) can only carry it as
+  a `const array<u32, N>`, because the world contract is WGSL with nothing bound to it.
+  Measured in Chrome 152 on the dev machine: a 6,000-word array takes 1.6 s to build a
+  compute pipeline, 22,000 words take 35.6 s; a 5,000-word one indexed at run time reads
+  as fast as a storage buffer once built. So the budget for such a table is about 5,000
+  words per shader, paid once per pipeline that includes the world (the voxelizer, the
+  far builder, the preview when it is switched on), and `docs/sweden/sweden-election.ts` stores its
+  raster as runs along each row to stay under it: 4 km cells come to 4,775 words, 3 km
+  would be 7,200; with the markers, every party's share per municipality and the vote
+  counts the file is 7,289 words, about 2.5 s a pipeline.
 - **Missed frames are counted against whatever the panel is doing.** `missedFrames` is
   frames longer than the display's interval, and the dev machine's panel moves between
   60 and 120 Hz on its own (a run at 16.7 ms `interval` p50 and the next at 8.3, on the
@@ -370,10 +381,53 @@ disproved, drop the marker or correct the entry. Append new traps as they are hi
 - **Float32 precision.** At a coordinate of about one million, f32 spacing is about
   0.06, enough to make geometry jitter. All GPU positions are camera-relative
   ([design-formats.md](design-formats.md) "Render space").
+- **A grazing far-field ray can walk straight through a floor at a brick edge.** The
+  brick DDA in `march_level` steps brick by brick from the plane crossings it computes;
+  the cell walk in `march_brick` places the ray from its position, `p0 + dir * (t + 1e-4)`.
+  In f32 those two disagree by a hair at every brick face, and the hair is bigger than
+  the nudge along an axis the ray barely moves on (the nudge is 1e-4 times that
+  component; rounding a coordinate near 250 is 3e-5). The walk used to answer "not in
+  this brick" for a cell a hair outside and walk nothing, so the ray crossed the brick
+  unchecked, and on the desert floor seen from 380 up that was a dashed hairline of
+  ground never hit along brick edges, with the ray hitting the solid rock under the
+  floor instead (`marks/20260916T0900*`). The entry cell is clamped into the brick now,
+  which can only move it by that hair. Diagnosed by replaying the DDA in f32 on the
+  marked ray (a flat floor is enough) once the readback of the brick showed its cells
+  solid; the mark tool's probe marches from zero like the frame does, so it reproduces
+  what the frame sees, but it cannot say why until the bricks themselves are read.
+- **A faceless hit's normal, guessed from a diagonal, is sideways on a flat floor.**
+  `entry_normal` walks back along the ray to the first air cell and reports the face
+  that step crossed. In half-cell hops the air cell it lands in is often diagonal to the
+  last solid one (up and back), and the axis it then picked from the diagonal was
+  whichever the hop moved furthest along, which for a grazing ray over a floor is a
+  horizontal one: a side-lit line where the levels' floors meet. It walks cell by cell
+  now, so the face is the one actually crossed.
+- **Two translucent blocks of one body need to say so.** The translucent rules hide a
+  face behind an opaque or a same-id neighbour and show it against any other id, which
+  is right for water against glass and wrong for the sea's shallow water against its
+  deep water: every depth contour got a translucent wall, one face from each side on
+  the same plane, and two coplanar translucent quads take whatever order the clusters
+  come in, so the contours flickered as the camera moved (the election map, seen from
+  93 up over the sea south of Skåne). `fluid` on a block (`sameFluid` in
+  `src/world/blocks.ts`) makes the two one body in both meshers; the reference and the
+  binary one agree on it in `translucent_test.ts`.
 - **Greedy quads create T-junctions.** Adjacent merged quads share edges at vertices
-  that aren't shared, which can show single-pixel sparkles. Camera-relative small
-  coordinates reduce it; if still visible, the known mitigations are a tiny outward
-  epsilon on quad corners or skipping merges across AO changes.
+  that aren't shared, and the rasteriser's own sub-pixel snapping opens single-pixel
+  gaps along the long edge: on a large flat floor (the election map's ground, a 32-wide
+  quad beside a row of small ones) they read as hairlines of far field through the
+  mesh. Camera-relative small coordinates are not enough. The fix in place is a
+  growth of every quad by EXPAND_PX (0.35 px) in its own plane, sized to the pixel at
+  the corner's depth (`expand_corner` in `src/render/near.wgsl`, from the projection
+  scale the camera uniform now carries in `offset.w`): constant in pixels whatever the
+  distance, so it is never a visible bulge up close nor too small far off, which a
+  world-space epsilon cannot be at both ends. In the plane and not on the screen: a
+  screen-space push turned quads seen nearly edge-on inside out, flipping their
+  winding, and the cull check caught the two frames of 40 where that showed. The
+  costs: where two different blocks meet, a third of the boundary pixels are
+  contested by two coplanar quads and fall to draw order (aliasing the boundary
+  already had), so the cull check calls depths within 1e-4 of each other a tie; and
+  nothing measurable in the draw (`gpu.near.a` 0.98 ms p50 in `grove.20260916T085722Z`
+  against 1.05 the day before, 1.25 in `flyover.20260916T0859*` against 1.77).
 - **AO anisotropy.** A quad's triangulation must flip based on its corner AO values
   or the gradient shows a diagonal seam.
 - **Single-phase Hi-Z culling shows holes.** Testing against last frame's depth

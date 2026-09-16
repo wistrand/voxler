@@ -4,7 +4,8 @@
     "build": "deno run --allow-read --allow-write=dist --allow-env --allow-run build.ts",
     "serve": "deno run --allow-read=dist,.certs --allow-env=PORT,HOST,TLS_CERT,TLS_KEY --allow-net serve.ts",
     "docs": "deno task build && deno run --allow-read=docs,dist --allow-env=PORT,HOST,BASE --allow-net docs-serve.ts",
-    "check": "deno check src/ build.ts serve.ts docs-serve.ts pack.ts",
+    "check": "deno check src/ build.ts serve.ts docs-serve.ts pack.ts docs/sweden/sweden-election.ts",
+    "sweden": "deno run --allow-net=resultat.val.se,raw.githubusercontent.com --allow-read=data --allow-write=data,docs/sweden docs/sweden/sweden-election.ts",
     "test": "deno test --permit-no-files --allow-read=src,docs src/",
     "bench": "deno bench --permit-no-files src/",
     "pack": "deno run --allow-read --allow-write=dist,dist-npm --allow-env --allow-run pack.ts"

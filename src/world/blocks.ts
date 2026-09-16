@@ -37,6 +37,12 @@ export interface BlockType {
   // (plan-living-world phase 4). Emission is how a block looks; light is what it does
   // to its neighbours, and a block can have either without the other.
   readonly light?: number;
+  // The body a translucent block belongs to. Two blocks of one fluid meet with no face
+  // between them, the way two voxels of one block do: a sea drawn as shallow and deep
+  // water is one body of water, and a wall of translucent faces down every depth
+  // contour, one from each side at the same plane, flickers as their draw order
+  // changes. Unset means the block is its own body.
+  readonly fluid?: string;
 }
 
 // Brightest a block light can be, and so how many voxels it reaches: the level falls
@@ -73,7 +79,11 @@ export const BLOCKS: readonly BlockType[] = [
     opaque: false,
     texture: ["water", "water", "water"],
     alpha: 0.6,
-    far: [0.42, 0.55, 0.78],
+    // What the near field's translucent water over a lit sand bed comes out as on
+    // screen (sampled at 77, 107, 150 of 255), so the far field's flat water meets it
+    // without a step at the near field's edge.
+    far: [0.30, 0.42, 0.59],
+    fluid: "water",
   },
   { id: 11, name: "glass", color: [0.8, 0.9, 0.95], opaque: false, texture: ["glass", "glass", "glass"], alpha: 0.35 },
   // Falling water: the face of a cascade, where the stream goes over a terrace riser.
@@ -203,6 +213,44 @@ export const BLOCKS: readonly BlockType[] = [
   // Birch bark: near-white with the dark dashes that are the whole reason a birch is
   // recognisable from across a wood.
   { id: 29, name: "birch", color: [0.86, 0.86, 0.81], opaque: true, texture: ["birch", "birch", "birch"] },
+  // The election map (src/worlds/sweden.wgsl): one block per Riksdag party, in the
+  // order docs/sweden/sweden-election.ts indexes them. The colours are Valmyndigheten's own (the
+  // `fargkod` in its result files), except two: S is eased off pure red so a lit face
+  // keeps some shade, and SD is the yellow the broadcasters use, because the
+  // authority's steel blue is a stone's throw from M's light blue at a distance.
+  { id: 30, name: "party-s", color: [0.85, 0.12, 0.12], opaque: true, texture: ["party-s", "party-s", "party-s"] },
+  { id: 31, name: "party-m", color: [0.40, 0.75, 0.90], opaque: true, texture: ["party-m", "party-m", "party-m"] },
+  { id: 32, name: "party-sd", color: [0.95, 0.80, 0.20], opaque: true, texture: ["party-sd", "party-sd", "party-sd"] },
+  { id: 33, name: "party-v", color: [0.77, 0.00, 0.00], opaque: true, texture: ["party-v", "party-v", "party-v"] },
+  { id: 34, name: "party-c", color: [0.39, 0.66, 0.11], opaque: true, texture: ["party-c", "party-c", "party-c"] },
+  { id: 35, name: "party-kd", color: [0.11, 0.36, 0.69], opaque: true, texture: ["party-kd", "party-kd", "party-kd"] },
+  { id: 36, name: "party-l", color: [0.20, 0.60, 1.00], opaque: true, texture: ["party-l", "party-l", "party-l"] },
+  { id: 37, name: "party-mp", color: [0.00, 0.50, 0.00], opaque: true, texture: ["party-mp", "party-mp", "party-mp"] },
+  // The map itself: paper for the land, ink for the borders and the marker pins.
+  // The land of each municipality in a pale wash of the party that won it: the party
+  // colours above mixed a little over half into paper, so the bubbles stacked over it
+  // stay the loud thing.
+  { id: 38, name: "won-s", color: [0.86, 0.52, 0.46], opaque: true, texture: ["won-s", "won-s", "won-s"] },
+  { id: 40, name: "won-m", color: [0.65, 0.80, 0.81], opaque: true, texture: ["won-m", "won-m", "won-m"] },
+  { id: 41, name: "won-sd", color: [0.90, 0.82, 0.50], opaque: true, texture: ["won-sd", "won-sd", "won-sd"] },
+  { id: 42, name: "won-v", color: [0.82, 0.46, 0.41], opaque: true, texture: ["won-v", "won-v", "won-v"] },
+  { id: 44, name: "won-c", color: [0.65, 0.76, 0.46], opaque: true, texture: ["won-c", "won-c", "won-c"] },
+  { id: 45, name: "won-kd", color: [0.52, 0.62, 0.72], opaque: true, texture: ["won-kd", "won-kd", "won-kd"] },
+  { id: 46, name: "won-l", color: [0.56, 0.73, 0.86], opaque: true, texture: ["won-l", "won-l", "won-l"] },
+  { id: 47, name: "won-mp", color: [0.47, 0.69, 0.41], opaque: true, texture: ["won-mp", "won-mp", "won-mp"] },
+  // The map's open sea, darker than the water along its coasts, so the sea has depth
+  // in it from above: the far field draws it flat, and `far` is what it draws.
+  {
+    id: 43,
+    name: "water-deep",
+    color: [0.16, 0.32, 0.64],
+    opaque: false,
+    texture: ["water", "water", "water"],
+    alpha: 0.7,
+    far: [0.26, 0.38, 0.55],
+    fluid: "water",
+  },
+  { id: 39, name: "map-ink", color: [0.24, 0.22, 0.20], opaque: true, texture: ["map-ink", "map-ink", "map-ink"] },
   // A jellyfish's bell, hanging in the forest's lakes. Opaque rather than translucent
   // on purpose: it sits inside water that is already translucent, and two translucent
   // surfaces one behind the other is a sorting problem for something six voxels across.
@@ -256,6 +304,25 @@ export const BLOCK_TRANSLUCENT: Uint8Array = (() => {
   for (const b of BLOCKS) if (b.id !== 0 && !b.opaque) table[b.id] = 1;
   return table;
 })();
+
+// The fluid a block belongs to, as a small number, 0 for none (`fluid` above).
+export const BLOCK_FLUID: Uint8Array = (() => {
+  const table = new Uint8Array(65536);
+  const names: string[] = [];
+  for (const b of BLOCKS) {
+    if (b.fluid === undefined) continue;
+    let i = names.indexOf(b.fluid);
+    if (i < 0) i = names.push(b.fluid) - 1;
+    table[b.id] = i + 1;
+  }
+  return table;
+})();
+
+// Whether a translucent face between `a` and `b` is hidden: the same block, or two
+// blocks of one fluid.
+export function sameFluid(a: number, b: number): boolean {
+  return a === b || (BLOCK_FLUID[a] !== 0 && BLOCK_FLUID[a] === BLOCK_FLUID[b]);
+}
 
 // `const BLOCK_STONE: u32 = 1u;` and so on, one per block.
 export function blockConstantsWgsl(): string {

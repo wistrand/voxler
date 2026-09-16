@@ -1,0 +1,373 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Voxler: the 2026 Riksdag election</title>
+<meta name="description" content="Sweden's 2026 election as a voxel map: every municipality washed in its winner's colour, with a stack of bubbles over it, one per party, sized by the votes.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' fill='%23223'/%3E%3Cpath d='M8 2l5 3v6l-5 3-5-3V5z' fill='%236c8'/%3E%3Cpath d='M8 2l5 3-5 3-5-3z' fill='%239ea'/%3E%3Cpath d='M8 8v6l-5-3V5z' fill='%234a6'/%3E%3C/svg%3E">
+<style>
+  :root {
+    --bg: #0e1116; --panel: #161b22; --edge: #262d36;
+    --text: #d8e0e8; --dim: #9aa7b4; --accent: #7fd39b; --warn: #e8c07d;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text); overflow: hidden;
+    font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  a { color: var(--accent); }
+  /* The map fills the window; everything else floats over it. */
+  #view { display: block; width: 100vw; height: 100vh; touch-action: none; cursor: grab; background: #000; }
+  #view:active { cursor: grabbing; }
+  #view:focus { outline: none; }
+  .panel {
+    position: fixed; top: 1rem; left: 1rem; max-width: 22rem; max-height: calc(100vh - 2rem); overflow-y: auto;
+    background: rgba(22, 27, 34, .92); border: 1px solid var(--edge); border-radius: 8px;
+    padding: 1rem 1.1rem .8rem;
+  }
+  .panel h1 { font-size: 1.25rem; margin: 0 0 .2rem; letter-spacing: -.01em; padding-right: 2rem; }
+  /* The fold: a button in the corner that leaves only the title, for a look at the map
+     with nothing over it. */
+  .fold {
+    position: absolute; top: .55rem; right: .6rem; width: 1.6rem; height: 1.6rem;
+    background: none; border: 1px solid var(--edge); border-radius: 4px; color: var(--dim);
+    font-size: .9rem; line-height: 1; cursor: pointer;
+  }
+  .fold:hover { color: var(--text); }
+  .panel.collapsed { padding-bottom: .7rem; max-width: 16rem; }
+  .panel.collapsed h1 { margin: 0; }
+  .panel.collapsed > :not(h1):not(.fold) { display: none; }
+  .panel p { margin: 0 0 .7rem; color: var(--dim); font-size: .92rem; }
+  .panel p strong { color: var(--text); }
+  .legend { list-style: none; margin: 0 0 .7rem; padding: 0; display: grid; grid-template-columns: 1fr 1fr; gap: .15rem .8rem; font-size: .92rem; }
+  .legend li { display: flex; align-items: center; gap: .5rem; white-space: nowrap; }
+  .legend .swatch { width: .95em; height: .95em; border-radius: 50%; flex: none; box-shadow: 0 0 0 1px rgba(0,0,0,.4) inset; }
+  .legend .share { color: var(--dim); margin-left: auto; font-variant-numeric: tabular-nums; }
+  .legend .won { color: var(--dim); font-size: .85em; }
+  .how { display: grid; grid-template-columns: max-content 1fr; gap: .2rem .7rem; margin: 0 0 .7rem; font-size: .9rem; }
+  .how dt { color: var(--text); font-weight: 600; white-space: nowrap; }
+  .how dd { margin: 0; color: var(--dim); }
+  .fine { font-size: .82rem; color: var(--dim); border-top: 1px solid var(--edge); padding-top: .6rem; margin: 0; }
+  details summary { cursor: pointer; color: var(--dim); font-size: .9rem; margin-bottom: .4rem; }
+  #status {
+    position: fixed; left: 50%; bottom: 1.2rem; transform: translateX(-50%);
+    background: rgba(22, 27, 34, .92); border: 1px solid var(--edge); border-radius: 6px;
+    padding: .45rem .9rem; color: var(--warn); font-size: .9rem; max-width: calc(100vw - 2rem);
+  }
+  #status[hidden] { display: none; }
+  .panel[hidden] { display: none; }
+  .detail { left: auto; right: 1rem; max-width: 20rem; }
+  .detail h2 { font-size: 1.1rem; margin: 0 0 .1rem; }
+  .detail .where { color: var(--dim); font-size: .88rem; margin: 0 0 .6rem; }
+  .detail .close { position: absolute; top: .5rem; right: .6rem; background: none; border: 0; color: var(--dim); font-size: 1.1rem; cursor: pointer; }
+  .bars { list-style: none; margin: 0 0 .6rem; padding: 0; font-size: .9rem; }
+  .bars li { display: grid; grid-template-columns: 2.2rem 1fr 3.2rem; align-items: center; gap: .5rem; margin-bottom: .2rem; }
+  .bars .bar { height: .7rem; border-radius: 3px; background: var(--edge); overflow: hidden; }
+  .bars .bar i { display: block; height: 100%; }
+  .bars .pct { text-align: right; color: var(--dim); font-variant-numeric: tabular-nums; }
+  .bars .winner { color: var(--text); font-weight: 600; }
+  .detail .fine { border-top: 0; padding-top: 0; }
+  @media (max-width: 40rem) { .detail { right: 1rem; left: 1rem; max-width: none; top: 1rem; bottom: auto; max-height: 45vh; } }
+  /* F2: where the camera is and what the last click hit, for pointing at a problem. */
+  #debug {
+    position: fixed; right: 1rem; bottom: 1rem; background: rgba(22, 27, 34, .92); border: 1px solid var(--edge);
+    border-radius: 6px; padding: .5rem .7rem; font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+    color: var(--text); white-space: pre; user-select: text; max-width: calc(100vw - 2rem); overflow-x: auto;
+  }
+  #debug[hidden] { display: none; }
+  @media (max-width: 40rem) {
+    .panel { max-width: calc(100vw - 2rem); top: auto; bottom: 1rem; max-height: 55vh; }
+    #status { bottom: auto; top: 1rem; }
+  }
+</style>
+</head>
+<body>
+<canvas id="view" tabindex="0" aria-label="Sweden's 2026 election as a voxel map"></canvas>
+
+<aside class="panel" id="panel">
+  <button class="fold" id="fold" aria-expanded="true" aria-controls="panel" title="Fold the panel away">&#8211;</button>
+  <h1>Riksdagsvalet 2026</h1>
+  <p>Every municipality, washed in the colour of the party that took most votes there, with
+  its result stacked over it.</p>
+  <ul class="legend" id="legend"></ul>
+  <details open>
+    <summary>How to read it</summary>
+    <dl class="how">
+      <dt>Stack</dt><dd>one bubble per party, biggest share at the bottom</dd>
+      <dt>Bubble</dt><dd>area follows the votes cast for that party there, not the land</dd>
+      <dt>Ground</dt><dd>the winner's colour, rising with the votes cast there (as the square root, so a city is a hill), municipality borders inked and county borders wider</dd>
+      <dt>Scale</dt><dd>one voxel is one kilometre</dd>
+      <dt>Fly</dt><dd>drag to look; WASD and Space/C to move, Shift to sprint, wheel to approach; on touch, two fingers fly</dd>
+    </dl>
+  </details>
+  <p class="fine" id="fine">Preliminary count, Valmyndigheten.</p>
+  <p class="fine">Click a stack, or the ground, for a municipality's numbers.</p>
+  <p class="fine"><a href="./">Voxler</a> &middot; <a href="start.html">Write a world of your own</a> &middot; <a href="https://github.com/wistrand/voxler">Source</a></p>
+</aside>
+<aside class="panel detail" id="detail" hidden>
+  <button class="close" id="close" aria-label="close">&times;</button>
+  <h2 id="d-name"></h2>
+  <p class="where" id="d-where"></p>
+  <ul class="bars" id="d-bars"></ul>
+  <p class="fine" id="d-fine"></p>
+</aside>
+<pre id="debug" hidden></pre>
+<p id="status">loading the engine</p>
+
+<script type="module">
+  // The map is a world like any other, built through the packaged API: two WGSL files,
+  // the generated data and the program that reads it, fetched from beside this page and
+  // handed to the engine as one world. The party blocks and the `map` sky are the
+  // engine's own; the world only names them.
+  const canvas = document.getElementById("view");
+  const status = document.getElementById("status");
+  const legend = document.getElementById("legend");
+  const fine = document.getElementById("fine");
+  const detail = document.getElementById("detail");
+  document.getElementById("close").addEventListener("click", () => detail.hidden = true);
+  // The panel folds to its title and back; which way it stands is remembered per browser.
+  const panel = document.getElementById("panel");
+  const fold = document.getElementById("fold");
+  function setFolded(folded) {
+    panel.classList.toggle("collapsed", folded);
+    fold.setAttribute("aria-expanded", String(!folded));
+    fold.textContent = folded ? "+" : "\u2013";
+    fold.title = folded ? "Open the panel" : "Fold the panel away";
+    try { localStorage.setItem("sweden-panel", folded ? "folded" : "open"); } catch { /* private window, no matter */ }
+  }
+  fold.addEventListener("click", () => setFolded(!panel.classList.contains("collapsed")));
+  try { if (localStorage.getItem("sweden-panel") === "folded") setFolded(true); } catch { /* as above */ }
+
+  // The party colours the engine draws the bubbles with (`party-*` in
+  // src/world/blocks.ts), and the names the legend needs.
+  const PARTIES = {
+    S: { name: "Socialdemokraterna", color: "rgb(217, 31, 31)" },
+    M: { name: "Moderaterna", color: "rgb(102, 191, 230)" },
+    SD: { name: "Sverigedemokraterna", color: "rgb(242, 204, 51)" },
+    V: { name: "Vänsterpartiet", color: "rgb(196, 0, 0)" },
+    C: { name: "Centerpartiet", color: "rgb(99, 168, 28)" },
+    KD: { name: "Kristdemokraterna", color: "rgb(28, 92, 176)" },
+    L: { name: "Liberalerna", color: "rgb(51, 153, 255)" },
+    MP: { name: "Miljöpartiet", color: "rgb(0, 128, 0)" },
+  };
+
+  function show(text) {
+    status.textContent = text;
+    status.hidden = text === "";
+  }
+
+  async function text(path) {
+    const res = await fetch(path);
+    if (!res.ok) throw new Error(`${path}: HTTP ${res.status}`);
+    return await res.text();
+  }
+
+  // The raster the world reads, read here too: the run-length rows and the grid's
+  // origin and cell, so a click on the ground can be turned into a municipality the
+  // same way the shader does it. The words come straight out of the WGSL text.
+  function parseGrid(data) {
+    const constant = (name) => parseFloat(data.match(new RegExp(`const ${name}: (?:f32|i32|u32) = (-?[0-9.]+)u?;`))[1]);
+    const array = (name) => data.match(new RegExp(`const ${name} = array<u32, \\d+>\\(([^)]*)\\);`))[1]
+      .split(",").map((s) => s.trim()).filter((s) => s !== "").map((s) => parseInt(s, 10));
+    const grid = {
+      cell: constant("SWEDEN_CELL"), cols: constant("SWEDEN_COLS"), rows: constant("SWEDEN_ROWS"),
+      x0: constant("SWEDEN_X0"), z0: constant("SWEDEN_Z0"),
+      rowStart: array("SWEDEN_ROW_START"), runs: array("SWEDEN_RUNS"),
+    };
+    // 0 for sea, else the municipality's index + 1.
+    grid.muniAt = (col, row) => {
+      if (col < 0 || row < 0 || col >= grid.cols || row >= grid.rows) return 0;
+      let x = 0;
+      for (let i = grid.rowStart[row]; i < grid.rowStart[row + 1]; i++) {
+        x += grid.runs[i] >>> 9;
+        if (col < x) return grid.runs[i] & 0x1ff;
+      }
+      return 0;
+    };
+    grid.cellOf = (x, z) => [Math.floor((x - grid.x0) / grid.cell), Math.floor((z - grid.z0) / grid.cell)];
+    return grid;
+  }
+
+  // Which municipality a pick is about. A bubble or a pin belongs to the nearest stack;
+  // the ground to the cell it is in; the sea to nothing.
+  function municipalityOf(hit, grid, summary) {
+    const x = hit.position[0] + hit.size / 2;
+    const z = hit.position[2] + hit.size / 2;
+    if (hit.name.startsWith("party-") || hit.name === "map-ink") {
+      let best = null;
+      let bestD = 14 + hit.size; // a bubble reaches ten voxels from its pin, a coarse cell more
+      for (const m of summary.municipalities) {
+        const mx = grid.x0 + (m.marker[0] + 0.5) * grid.cell;
+        const mz = grid.z0 + (m.marker[1] + 0.5) * grid.cell;
+        const d = Math.hypot(x - mx, z - mz);
+        if (d < bestD) {
+          bestD = d;
+          best = m;
+        }
+      }
+      return best;
+    }
+    if (hit.name.startsWith("won-")) {
+      const [col, row] = grid.cellOf(x, z);
+      const index = grid.muniAt(col, row);
+      return index === 0 ? null : summary.municipalities[index - 1];
+    }
+    return null;
+  }
+
+  function showDetail(m) {
+    document.getElementById("d-name").textContent = m.name;
+    document.getElementById("d-where").textContent = `${m.county}, ${m.votes.toLocaleString("sv-SE")} votes, turnout ${m.turnout.toFixed(1)}%`;
+    const order = Object.entries(m.shares).sort((a, b) => b[1] - a[1]);
+    const top = order[0][1];
+    document.getElementById("d-bars").replaceChildren(...order.map(([code, share], i) => {
+      const li = document.createElement("li");
+      const label = document.createElement("span");
+      label.textContent = code;
+      label.title = PARTIES[code].name;
+      if (i === 0) label.className = "winner";
+      const bar = document.createElement("span");
+      bar.className = "bar";
+      const fill = document.createElement("i");
+      fill.style.width = `${(share / top) * 100}%`;
+      fill.style.background = PARTIES[code].color;
+      bar.append(fill);
+      const pct = document.createElement("span");
+      pct.className = "pct";
+      pct.textContent = `${share.toFixed(1)}%`;
+      li.append(label, bar, pct);
+      return li;
+    }));
+    document.getElementById("d-fine").textContent = m.counted === m.toCount
+      ? "All districts counted."
+      : `${m.counted} of ${m.toCount} districts counted.`;
+    detail.hidden = false;
+  }
+
+  // The F2 readout: the camera as voxels and degrees, the frame rate, what the far
+  // field holds, and the last pick. Its text is selectable, so a line can be pasted
+  // into a bug report as it stands, and for that it is written only when it opens and
+  // on a click: a panel rewritten every frame drops the selection on every rewrite.
+  const debug = document.getElementById("debug");
+  let lastHit = null;
+  let lastInterval = 0;
+  function updateDebug(v) {
+    if (debug.hidden || v === null) return;
+    const c = v.camera;
+    const deg = 180 / Math.PI;
+    const far = v.renderer?.far;
+    const lines = [
+      `camera  ${c.worldPosition(0).toFixed(1)} ${c.worldPosition(1).toFixed(1)} ${c.worldPosition(2).toFixed(1)}   yaw ${(c.yaw * deg).toFixed(1)}  pitch ${(c.pitch * deg).toFixed(1)}   (${c.yaw.toFixed(3)}, ${c.pitch.toFixed(3)} rad)`,
+      `frame   ${lastInterval > 0 ? (1000 / lastInterval).toFixed(0) : "?"} fps   chunks ${v.streamer?.stats?.resident ?? "?"}   quads ${v.renderer?.near?.stats?.realQuads ?? "?"}`,
+      far ? `far     levels ${far.map.levels}  cell ${far.map.cellVoxels(0)} voxels at level 0  bricks ${far.stats.bricks}  queued ${far.stats.queued}` : "far     off",
+      lastHit === null
+        ? "click   nothing picked yet"
+        : `click   ${lastHit.name} at ${lastHit.position.join(" ")}  size ${lastHit.size}  ${lastHit.far ? `far field, level ${Math.round(Math.log2(lastHit.size / (far?.map.cellVoxels(0) ?? 1)))}` : "near field"}  distance ${lastHit.distance.toFixed(1)}  normal ${lastHit.normal.join(" ")}`,
+    ];
+    debug.textContent = lines.join("\n");
+  }
+  function toggleDebug() {
+    debug.hidden = !debug.hidden;
+    updateDebug(globalThis.voxler ?? null);
+  }
+  // F2, or I for a keyboard whose F keys are behind Fn. Not in the panel: a reader
+  // of the map has no use for it.
+  addEventListener("keydown", (e) => {
+    if ((e.code !== "F2" && e.code !== "KeyI") || e.repeat) return;
+    if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+    e.preventDefault();
+    toggleDebug();
+  });
+
+
+  function fillLegend(summary) {
+    legend.replaceChildren(...summary.parties.map((p) => {
+      const li = document.createElement("li");
+      const swatch = document.createElement("span");
+      swatch.className = "swatch";
+      swatch.style.background = PARTIES[p.code].color;
+      const label = document.createElement("span");
+      label.textContent = p.code;
+      label.title = PARTIES[p.code].name;
+      const share = document.createElement("span");
+      share.className = "share";
+      share.textContent = `${p.share.toFixed(1)}%`;
+      li.append(swatch, label, share);
+      if (p.won > 0) {
+        const won = document.createElement("span");
+        won.className = "won";
+        won.textContent = `${p.won}`;
+        won.title = `municipalities where ${p.code} took most votes`;
+        li.append(won);
+      }
+      return li;
+    }));
+    fine.textContent = `${summary.election}, ${summary.count} count as Valmyndigheten published it ` +
+      `(${summary.districtsCounted} of ${summary.districtsToCount} districts, updated ${summary.updated}); turnout ${summary.turnout}. ` +
+      `The shares are the whole country's, the small number how many municipalities the party took. Boundaries: okfse/sweden-geojson.`;
+  }
+
+  async function main() {
+    const [data, world, summary] = await Promise.all([
+      text("sweden/sweden-data.wgsl"),
+      text("sweden/sweden.wgsl"),
+      fetch("sweden/results.json").then((r) => r.json()),
+    ]);
+    fillLegend(summary);
+    const grid = parseGrid(data);
+    show("loading the engine");
+    const api = await import("./play/voxler.js");
+    show("compiling the map, a few seconds on a first load");
+    const voxler = await api.Voxler.create(canvas, {
+      world: {
+        code: data + world,
+        // One voxel is a kilometre, north is -Z. The view opens off the south coast with
+        // the whole country in it, looking north and down; most of it is the far field
+        // from there, so its levels are wide, and the sky's air is thin enough for the
+        // north to still be there.
+        spawn: [32, 150, 288],
+        start: [-21, 391, 996],
+        look: [0.08, -0.712],
+        sky: "map",
+        far: { size: 64, levels: 6, bricks: 98304 },
+      },
+      // The view opens 390 up and the near field streams six chunks under the camera by
+      // default, which from there is none of the map: everything was the far field at two
+      // voxels a cell and up, and the bubbles read as blocks. Fourteen chunks reach the
+      // ground, so what is near is drawn a voxel at a time.
+      stream: { height: 14 },
+      render: { gizmo: false },
+    }, {
+      onCompiling: (left) => show(left.length ? `compiling ${left.join(" ")}` : ""),
+      onUnsupported: (message) => show(message),
+      onError: (message) => {
+        console.warn("[voxler]", message);
+        show(message);
+      },
+      // A click asks the engine what is under it: a voxel the meshes hold, or further out
+      // the cell the far field's march meets. Either way a position and a block, which
+      // is enough to name the municipality.
+      afterFrame: (_now, interval) => {
+        lastInterval = interval;
+      },
+      onClick: (x, y) => {
+        voxler.pick(x, y).then((hit) => {
+          lastHit = hit;
+          updateDebug(voxler);
+          const m = hit === null ? null : municipalityOf(hit, grid, summary);
+          if (m === null) detail.hidden = true;
+          else showDetail(m);
+        }).catch((err) => console.warn("[pick]", err));
+      },
+    });
+    voxler.start();
+    globalThis.voxler = voxler;
+    canvas.focus();
+  }
+
+  main().catch((err) => show(String(err)));
+</script>
+</body>
+</html>

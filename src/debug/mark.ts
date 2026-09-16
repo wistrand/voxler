@@ -79,8 +79,12 @@ export interface Mark {
   readonly context?: Record<string, unknown>;
 }
 
+// By id, not by index: BLOCKS is not in id order past the first dozen, and by index
+// every desert mark read as moss (index 20) when it was red sand (id 20).
+const BLOCK_NAMES = new Map(BLOCKS.map((b) => [b.id, b.name]));
+
 function blockName(id: number): string {
-  return BLOCKS[id]?.name ?? `#${id}`;
+  return BLOCK_NAMES.get(id) ?? `#${id}`;
 }
 
 // Collects one mark. Runs two GPU probes and maps their results, so it is awaited from a

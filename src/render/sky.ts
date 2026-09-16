@@ -142,7 +142,12 @@ const SPACE: Sky = {
   stars: 1.0,
 };
 
-export const SKIES: Readonly<Record<string, Sky>> = { day: DAY, night: NIGHT, desert: DESERT, space: SPACE };
+// The election map's sky: the day, with air thin enough that the north of the country
+// is still there from a camera off the south coast, 2,000 voxels away. The day's fog
+// would have taken half of it by then.
+const MAP: Sky = { ...DAY, name: "map", fogDensity: 0.00008 };
+
+export const SKIES: Readonly<Record<string, Sky>> = { day: DAY, night: NIGHT, desert: DESERT, space: SPACE, map: MAP };
 export const DEFAULT_SKY = "day";
 
 // What is left of a surface at the far end of the view, under which drawing it and

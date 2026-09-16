@@ -144,6 +144,40 @@ fn ao_level(w1: u32, c: u32) -> f32 {
   return f32((w1 >> (16u + 2u * c)) & 3u);
 }
 
+// Greedy meshing puts a long quad beside two short ones everywhere, and the short
+// quads' shared vertex lies on the long quad's edge without being one of its vertices.
+// The rasteriser snaps each vertex to its sub-pixel grid on its own, so that edge can
+// miss that vertex by a fraction of a pixel, and where a pixel centre falls in the gap
+// nothing draws it: a hairline of far field or sky across a flat floor, one pixel here
+// and there along the seam. Every quad is grown EXPAND_PX outward in its own plane,
+// sized to the pixel at the corner's depth, so neighbours overlap by that much whatever
+// the distance, under a pixel, and the gap closes. In the plane rather than on the
+// screen, because a screen-space push can turn a quad seen nearly edge-on inside out
+// and flip its winding; a bigger rectangle in its own plane cannot. Coplanar overlaps
+// draw the same surface; where two blocks meet, the contested pixels are the boundary's
+// own, which alias anyway (gotchas.md "Greedy quads create T-junctions"). A corner off
+// the screen stays put, so a cluster the frustum test dropped has no fringe reaching an
+// edge pixel that the unculled check draw would show.
+const EXPAND_PX: f32 = 0.35;
+
+// Takes the corner's clip position and returns it grown; the growth is a render-space
+// vector, so it projects with the same matrix and adds in clip space.
+fn expand_corner(clip: vec4f, u: u32, v: u32, su: f32, sv: f32) -> vec4f {
+  if (clip.w <= 0.0) {
+    return clip; // behind the eye: clipped anyway
+  }
+  if (any(abs(clip.xy / clip.w) > vec2f(1.0))) {
+    return clip;
+  }
+  // One pixel at this depth, in render-space units: 2 / height in NDC, over the
+  // projection's y scale, times the view depth.
+  let eps = EXPAND_PX * 2.0 * clip.w * camera.viewport.w / camera.offset.w;
+  var grow = vec3f(0.0);
+  grow[u] = su * eps;
+  grow[v] = sv * eps;
+  return clip + camera.view_proj * vec4f(grow, 0.0);
+}
+
 fn quad_vertex(w0: u32, w1: u32, k: u32, slot: u32) -> VsOut {
   let face = (w0 >> 25u) & 7u;
   var p = vec3i(i32(w0 & 31u), i32((w0 >> 5u) & 31u), i32((w0 >> 10u) & 31u));
@@ -173,6 +207,9 @@ fn quad_vertex(w0: u32, w1: u32, k: u32, slot: u32) -> VsOut {
   if (BLOCK_LIT) {
     light = light_level(w0, w1, c);
   }
+  // Which way this corner faces out of the quad along u and v, for the expansion.
+  let su = select(-1.0, 1.0, c == 1u || c == 2u);
+  let sv = select(-1.0, 1.0, c >= 2u);
   if (c == 1u || c == 2u) {
     p[u] += w;
   }
@@ -189,7 +226,7 @@ fn quad_vertex(w0: u32, w1: u32, k: u32, slot: u32) -> VsOut {
     at += wind_offset(chunks[slot].xyz * 32 + p, block_colors[min(id, MAX_BLOCK_TYPES - 1u) * 3u + 1u].w);
   }
   var out: VsOut;
-  out.position = camera.view_proj * vec4f(at, 1.0);
+  out.position = expand_corner(camera.view_proj * vec4f(at, 1.0), u, v, su, sv);
   out.id_face = (id << 3u) | face;
   out.ao = ao;
   out.light = light;

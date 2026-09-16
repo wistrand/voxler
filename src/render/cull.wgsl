@@ -130,8 +130,12 @@ fn hiz_occluded(lo: vec3f, hi: vec3f) -> bool {
   }
   // Clip space to Hi-Z texels (y grows downward in the texture).
   let size = cull.viewport.xy;
-  let a = (vec2f(rect_min.x, -rect_max.y) * 0.5 + 0.5) * size;
-  let b = (vec2f(rect_max.x, -rect_min.y) * 0.5 + 0.5) * size;
+  // A pixel's margin either way: the draw expands every quad EXPAND_PX outward in
+  // screen space (near.wgsl), so a cluster's geometry can reach past its box's
+  // rectangle by that much, and a cluster culled on the bare rectangle would lose the
+  // fringe that pokes out beside its occluder.
+  let a = (vec2f(rect_min.x, -rect_max.y) * 0.5 + 0.5) * size - vec2f(1.0);
+  let b = (vec2f(rect_max.x, -rect_min.y) * 0.5 + 0.5) * size + vec2f(1.0);
   let extent = max(b.x - a.x, b.y - a.y);
   let level = clamp(i32(ceil(log2(max(extent, 1.0)))), 0, i32(cull.viewport.z) - 1);
   let scale = f32(1u << u32(level));

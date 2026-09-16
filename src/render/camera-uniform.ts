@@ -71,7 +71,9 @@ export class CameraUniform {
     f[OFFSET] = camera.offset[0];
     f[OFFSET + 1] = camera.offset[1];
     f[OFFSET + 2] = camera.offset[2];
-    f[OFFSET + 3] = 0;
+    // The projection's y scale, for anything that needs the size of a pixel at a depth
+    // (the quad expansion in near.wgsl): one pixel is 2 * depth / (scale * height).
+    f[OFFSET + 3] = this.proj[5];
     f[VIEWPORT] = width;
     f[VIEWPORT + 1] = height;
     f[VIEWPORT + 2] = 1 / width;

@@ -199,6 +199,25 @@ export const TEXTURES: readonly TextureDef[] = [
   { name: "sandstone", paint: bedded(0.78, 0.48, 0.31, 59, 0.13, 5) },
   { name: "caprock", paint: specks(flat(0.56, 0.47, 0.42, 61, 0.14, 3), 63, 0.42, 0.35, 0.32, 0.30) },
   { name: "sage", paint: specks(flat(0.40, 0.43, 0.31, 65, 0.26), 67, 0.30, 0.33, 0.24, 0.35) },
+  // The election map's party colours (src/world/blocks.ts), flat with a little grain
+  // so a wall of one party is not one unbroken tone.
+  { name: "party-s", paint: flat(0.85, 0.12, 0.12, 71, 0.08) },
+  { name: "party-m", paint: flat(0.40, 0.75, 0.90, 73, 0.08) },
+  { name: "party-sd", paint: flat(0.95, 0.80, 0.20, 75, 0.08) },
+  { name: "party-v", paint: flat(0.77, 0.00, 0.00, 77, 0.08) },
+  { name: "party-c", paint: flat(0.39, 0.66, 0.11, 79, 0.08) },
+  { name: "party-kd", paint: flat(0.11, 0.36, 0.69, 81, 0.08) },
+  { name: "party-l", paint: flat(0.20, 0.60, 1.00, 83, 0.08) },
+  { name: "party-mp", paint: flat(0.00, 0.50, 0.00, 85, 0.08) },
+  { name: "map-ink", paint: flat(0.24, 0.22, 0.20, 89, 0.04) },
+  { name: "won-s", paint: flat(0.86, 0.52, 0.46, 87, 0.05) },
+  { name: "won-m", paint: flat(0.65, 0.80, 0.81, 91, 0.05) },
+  { name: "won-sd", paint: flat(0.90, 0.82, 0.50, 93, 0.05) },
+  { name: "won-v", paint: flat(0.82, 0.46, 0.41, 95, 0.05) },
+  { name: "won-c", paint: flat(0.65, 0.76, 0.46, 97, 0.05) },
+  { name: "won-kd", paint: flat(0.52, 0.62, 0.72, 99, 0.05) },
+  { name: "won-l", paint: flat(0.56, 0.73, 0.86, 101, 0.05) },
+  { name: "won-mp", paint: flat(0.47, 0.69, 0.41, 103, 0.05) },
 ];
 
 export const TEXTURE_LAYERS: Readonly<Record<string, number>> = Object.fromEntries(

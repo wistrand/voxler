@@ -64,6 +64,8 @@ jobs:
           # The demo has to be reachable at play/ or the page's only button is dead.
           test -f _site/index.html
           test -f _site/start.html
+          test -f _site/sweden-2026.html
+          test -f _site/sweden/sweden-data.wgsl
           test -f _site/play/index.html
           test -f _site/play/main.js
           test -f _site/play/voxler.js

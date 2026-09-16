@@ -15,8 +15,9 @@
 // Opaque pass: source and occluder are the opaque columns, nb the opacity planes.
 // Translucent pass, once per translucent id t in the chunk (phase 6 rules): source
 // is t's columns, occluder is opaque | t, nb is the opacity plane | (border id ==
-// t). So opaque and same-id neighbors hide a translucent face, a different
-// translucent id doesn't, and translucent voxels never hide opaque faces (they
+// t). So opaque and same-id neighbors hide a translucent face (and neighbors of the
+// same fluid, `sameFluid` in blocks.ts: shallow and deep water are one body), a
+// different translucent id doesn't, and translucent voxels never hide opaque faces (they
 // aren't in the opaque occluder). Translucent quads go to their own mesh.
 //
 // Emission: mesh() merges greedily (phase 3); `merge: false` emits one 1x1 quad
@@ -44,7 +45,7 @@
 // pool of light under a mushroom breaks the merge into steps. That is the cost of
 // baking it, and why the job only fills the grid where a light is.
 
-import { BLOCK_LIGHT, BLOCK_OPAQUE, BLOCK_TRANSLUCENT } from "../world/blocks.ts";
+import { BLOCK_LIGHT, BLOCK_OPAQUE, BLOCK_TRANSLUCENT, sameFluid } from "../world/blocks.ts";
 import type { ChunkData } from "../world/chunk.ts";
 import { CHUNK_VOLUME } from "../world/coords.ts";
 import { faceAo, PAD_VOLUME, padIndex } from "./ao.ts";
@@ -255,16 +256,30 @@ export class BinaryMesher {
           for (let i = 0; i < COLUMNS; i++) occ[i] = o[i] | s[i];
         }
       }
-      // Planes: opaque neighbor or the same id across the border.
+      // Planes: opaque neighbor or the same id (or fluid) across the border.
       const tp = this.tPlanes[k];
       for (let face = 0; face < FACE_COUNT; face++) {
         for (let v = 0; v < 32; v++) {
           let bits = planes[face * PLANE_WORDS + v];
           if (borders !== null) {
             const row = face * BORDER_IDS + v * 32;
-            for (let u = 0; u < 32; u++) if (borders[row + u] === id) bits |= 1 << u;
+            for (let u = 0; u < 32; u++) if (sameFluid(borders[row + u], id)) bits |= 1 << u;
           }
           tp[face * PLANE_WORDS + v] = bits;
+        }
+      }
+    }
+    // Another id of the same fluid occludes like the id itself; every source is built
+    // by now, so each can take the others' columns.
+    if (!uniform) {
+      for (let k = 0; k < nt; k++) {
+        for (let j = 0; j < nt; j++) {
+          if (j === k || !sameFluid(this.tIds[k], this.tIds[j])) continue;
+          for (let a = 0; a < 3; a++) {
+            const occ = this.tOccluder[k][a];
+            const s = this.tSource[j][a];
+            for (let i = 0; i < COLUMNS; i++) occ[i] |= s[i];
+          }
         }
       }
     }

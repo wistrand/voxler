@@ -66,6 +66,15 @@ Four worlds ship: a showcase of the SDF primitives, a terrain world, a fantasy f
 night with glowing fungus, lakes, waterfalls, mountains and flocks of birds over it, and a
 desert of Monument Valley buttes. Pressing K starts a flyover that follows whatever is under the camera,
 which over a river follows the river. It flies on a phone too: one finger looks, two fly.
+One world is not a landscape at all: [voxler.dev/sweden-2026.html](https://voxler.dev/sweden-2026.html)
+is the 2026 Riksdag election as a map, the country in low relief at a kilometre a voxel,
+each municipality washed in the colour of the party that won it and raised with the
+votes cast there, the borders inked on, and
+a stack of bubbles over each municipality, one per party from the biggest share at the
+bottom up, each sized by the votes that party got there rather than by the land. The
+numbers are Valmyndigheten's preliminary count, fetched and rasterised into the world
+program by `deno task sweden`; the page builds the world through the same API a host
+would use, and a click on a stack or the ground opens that municipality's numbers.
 
 ## Requirements
 

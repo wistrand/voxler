@@ -480,7 +480,10 @@ previous frame's full depth instead of phase A's.
 - [x] Translucent pass with per-chunk ordering
 
 **Verify:** visual checks for seams, T-junction sparkles, AO diagonals, texture
-shimmer; GPU time recorded per pass.
+shimmer; GPU time recorded per pass. The T-junction sparkles were left as known until
+2026-09-16, when a flat floor made them hairlines; every quad is grown a third of a
+pixel in its own plane now (`expand_corner` in near.wgsl, [gotchas.md](gotchas.md)
+"Greedy quads create T-junctions"), at no measurable draw cost.
 
 Result, AO spike. Baked AO won; `?ao=0` keeps the A/B. What landed: `fillShell()`
 (`src/mesh/ao.ts`) writes the padded 34^3 shell from all 26 neighbors in

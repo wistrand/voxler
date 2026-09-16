@@ -3,9 +3,10 @@ import { CHUNK_VOLUME, voxelIndex } from "../world/coords.ts";
 import { BinaryMesher, NO_MERGE } from "./binary.ts";
 import { coverage, diffCoverage } from "./coverage.ts";
 import { newBorders, uniformPlanes } from "./planes.ts";
-import { FACE_POS_X } from "./quad.ts";
+import { FACE_NEG_X, FACE_POS_X } from "./quad.ts";
 import { meshReference, meshReferenceTranslucent } from "./reference.ts";
 import { GLASS, neighborSetups, testChunks, WATER } from "./testchunks.ts";
+import { BLOCKS, sameFluid } from "../world/blocks.ts";
 
 function assert(cond: boolean, what: string): void {
   if (!cond) throw new Error(what);
@@ -116,4 +117,41 @@ Deno.test("NO_MERGE and default meshes leave the translucent mesh empty for opaq
   const terrain = testChunks().find((c) => c.name === "terrain-like")!;
   mesher.mesh(ChunkData.fromDense(terrain.ids), uniformPlanes(false), NO_MERGE);
   assert(mesher.translucent.count === 0 && mesher.translucent.groupStart[6] === 0, "reset between chunks");
+});
+
+// Shallow and deep water are one fluid: a column of each side by side meshes no wall
+// between them, in the reference and the binary mesher alike, while water beside glass
+// still gets its interface.
+Deno.test("two blocks of one fluid meet with no face between them", () => {
+  const deep = BLOCKS.find((b) => b.fluid === "water" && b.id !== WATER)!.id;
+  assert(sameFluid(WATER, deep) && !sameFluid(WATER, GLASS), "water and deep water are one fluid, water and glass are not");
+  const ids = new Uint16Array(CHUNK_VOLUME);
+  for (let y = 0; y < 8; y++) {
+    for (let z = 0; z < 32; z++) {
+      for (let x = 0; x < 32; x++) ids[voxelIndex(x, y, z)] = x < 16 ? WATER : deep;
+    }
+  }
+  // The same shape with glass on the east side, for the count a real interface adds.
+  const glassy = new Uint16Array(ids);
+  for (let i = 0; i < CHUNK_VOLUME; i++) if (glassy[i] === deep) glassy[i] = GLASS;
+  const planes = uniformPlanes(false);
+  // Faces on the plane x = 16, from both sides.
+  const wall = (map: Uint16Array): number => {
+    let n = 0;
+    for (let y = 0; y < 32; y++) {
+      for (let z = 0; z < 32; z++) {
+        if (map[FACE_POS_X * CHUNK_VOLUME + voxelIndex(15, y, z)] !== 0) n++;
+        if (map[FACE_NEG_X * CHUNK_VOLUME + voxelIndex(16, y, z)] !== 0) n++;
+      }
+    }
+    return n;
+  };
+  const fluid = coverage(meshReferenceTranslucent(ids, planes, null)).map;
+  const mixed = coverage(meshReferenceTranslucent(glassy, planes, null)).map;
+  assert(wall(fluid) === 0, `${wall(fluid)} faces between shallow and deep water`);
+  assert(wall(mixed) === 2 * 8 * 32, `${wall(mixed)} faces between water and glass`);
+  const mesher = new BinaryMesher();
+  mesher.mesh(ChunkData.fromDense(ids), planes, { borders: null });
+  const diff = diffCoverage(fluid, coverage(mesher.translucent).map);
+  assert(diff === null, `binary mesher differs from the reference: ${diff}`);
 });

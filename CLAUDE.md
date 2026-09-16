@@ -159,10 +159,11 @@ today `src/gpu/`, `src/render/`, `src/camera/`, `src/util/`, `src/debug/`,
 | `serve.ts`       | static server for `dist/` with COOP/COEP headers; `--dev` also watches, rebuilds and answers the benchmark save route |
 | `docs-serve.ts`  | static server for the Pages site, deliberately without COOP/COEP (`deno task docs`) |
 | `pack.ts`        | the npm tarball: `voxler.js`, the worker, a generated `package.json`. Installed by URL, not from a registry ([plan-packaging.md](agent_docs/plan-packaging.md)) |
+| `data/`          | what `docs/sweden/sweden-election.ts` fetched (gitignored; the generated files beside the script are what is committed) |
 | `src/version.ts` | the version, read by `pack.ts`, printed in `docs/start.html`, exported from the bundle; `src/release_test.ts` keeps the first two in step |
 | `dist/`          | build output, gitignored; CI copies it into the published site under `play/` |
 | `agent_docs/`    | deep dives (linked below)                                      |
-| `docs/`          | the GitHub Pages site: landing page, the get-started page that embeds the API, and screenshots (`docs/README.md`) |
+| `docs/`          | the GitHub Pages site: landing page, the get-started page that embeds the API, the election map (`sweden-2026.html`, a world that lives with its page and is built through the API; `docs/sweden/` holds its program, its generated tables and `sweden-election.ts`, which fetches the count and the boundaries and writes them), and screenshots (`docs/README.md`) |
 | `.github/`       | the `pages` workflow: check, test, build, then publish `docs/` with `dist/` under `play/` |
 | `LICENSE`        | Apache 2.0                                                     |
 
@@ -180,7 +181,8 @@ deno task docs     # build, then serve the GitHub Pages site with no COOP/COEP, 
                    # serves it (127.0.0.1:8001; BASE=voxler to mirror the project subpath)
 deno task pack     # release build plus dist-npm/voxler-<version>.tgz, an npm-installable
                    # tarball; not published to a registry, CI puts it on the site instead
-deno task check    # type-check src/, build.ts, serve.ts, docs-serve.ts, pack.ts
+deno task sweden   # refetch the election result and rebuild docs/sweden/sweden-data.wgsl
+deno task check    # type-check src/, build.ts, serve.ts, docs-serve.ts, pack.ts, docs/sweden/sweden-election.ts
 deno task test     # unit tests; GPU tests use Deno's built-in WebGPU (skip without an adapter)
 deno task bench    # kernel benchmarks (meshing, palette compression, reduction)
 ```
@@ -258,7 +260,7 @@ sizes the near-field quad arena (default 64); `?ao=0` meshes and draws without
 baked AO (the phase 5 A/B; it also drops the mesh job back to 6 neighbors); `?tex=0`
 draws flat block colors instead of sampling the block textures; `?glow=0` drops block
 emission, `?wind=0` holds swaying blocks still, `?light=0` meshes and draws without block
-light and `?shadow=0` stops marching shadow rays; `?sky=<day|night|desert|space>` overrides the
+light and `?shadow=0` stops marching shadow rays; `?sky=<day|night|desert|space|map>` overrides the
 world's own sky and lighting preset (`src/render/sky.ts`); `?birds=0` turns the bird flock off in a world
 that has one; `?gizmo=0` starts without the axis cross in the corner, which is what a
 screenshot wants; `?bloom=1` and `?bloom=0` bloom the glowing blocks or not (the world's
@@ -662,6 +664,24 @@ away here:
   the reason it does is that the camera has yaw and pitch and no roll
   ([gotchas.md](agent_docs/gotchas.md) "A round world has no up for a camera that only has
   yaw and pitch").
+  A world can also be data rather than noise, and it need not live in `src/worlds/`:
+  the 2026 Riksdag election (`docs/sweden-2026.html`) is the country as a map in low relief,
+  each municipality washed in a pale tone of the party that won it and raised with the
+  votes cast there (the square root, blended between cells so it rolls), the borders
+  inked on, and over each a stack of bubbles, one per party from the biggest share at
+  the bottom up, each sized by the votes that party got there. A click on any of it
+  names the municipality (`hooks.onClick` and `pick()` in the API). Its program, the script that fetches
+  and rasterises the data and the tables it generates sit beside the page (`docs/sweden/`), and the page
+  builds the world through `Voxler.create` like any host would; what stays in the
+  engine is what a world can only name, the `party-*` and `won-*` blocks and the `map`
+  sky, whose air is thin enough for the whole country to be in view from off the south
+  coast, 390 up; the page streams fourteen chunks under the camera so the near field
+  reaches the map from there, and the rest is the far field on wide levels. The
+  contract has no data buffer, so a table is a `const` array in the shader,
+  and its size is bounded by Tint, not by memory ([gotchas.md](agent_docs/gotchas.md)
+  "A `const` array is compiled, not loaded"). `src/worlds/sweden_test.ts` compiles it
+  against the engine, since the test that compiles every world in `WORLDS` cannot see
+  it.
   A new block type is one entry in `BLOCKS` (`src/world/blocks.ts`); worlds see it as
   `BLOCK_<NAME>`; a name that is not an identifier becomes one (`leaves-dark` is
   `BLOCK_LEAVES_DARK`). A block that glows carries an `emission` colour, added to the lit
@@ -673,7 +693,12 @@ away here:
   stage applies to its faces, or `flow`, which scrolls its texture down them instead:
   sway is for a thing attached at one end, flow for a surface that is going somewhere,
   and swaying a sheet of water pushes it into its neighbours and flickers
-  ([gotchas.md](agent_docs/gotchas.md) "Animate flowing water with the texture").
+  ([gotchas.md](agent_docs/gotchas.md) "Animate flowing water with the texture"). Two
+  translucent blocks that are one body (`water` and `water-deep`) share a `fluid`, or
+  the mesher walls them off from each other with a translucent face from each side on
+  the same plane, and the wall flickers with the draw order down every depth contour
+  ([gotchas.md](agent_docs/gotchas.md) "Two translucent blocks of one body need to say
+  so").
 - Anything that travels is drawn, not voxelized, and anything that stays put is voxelized,
   not drawn. A chunk is voxelized once and a brick sampled once, so a position that depends
   on time would put every chunk it crosses back through the voxelizer every frame; the two
@@ -722,7 +747,10 @@ away here:
   footprint and drop the feature only once it is narrower than a cell, because below that
   it can only be drawn inflated to one. A broad continuous feature (a canopy) survives
   being drawn coarsely; a small bright one (a glowing cap) becomes a cell-sized lantern,
-  so it needs a much finer gate.
+  so it needs a much finer gate. The election map's bubbles are the case in point: a
+  bubble narrower than a far-field cell is drawn a cell wide (`nearest_marker` in
+  `docs/sweden/sweden.wgsl`), its pin is voxelizer-only, and a border line becomes the
+  cell it runs along.
 - A world names a sky and lighting preset from `SKIES` (`src/render/sky.ts`); unset
   means `DEFAULT_SKY`. The preset is generated into WGSL and prepended to every shader
   that lights or fogs a surface, so it is the one lighting model with different numbers

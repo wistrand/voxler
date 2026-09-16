@@ -119,10 +119,19 @@ since the brick skipping is what has the bugs.
 Three bugs that only the browser found, all of them about order rather than
 traversal:
 
-- The inner DDA clamped the entry cell into the brick. On a ray that only grazes a
-  brick's corner that invents a cell the ray never reaches, and the march reports a
-  hit in mid-air. It now steps a hair past the entry and rejects the brick if the cell
-  lands outside.
+- The inner DDA clamped the entry cell into the brick, and the fear then was that on a
+  ray grazing a brick's corner this invents a cell the ray never reaches. It was
+  changed to step a hair past the entry and reject the brick if the cell landed
+  outside, and that was the worse choice: in f32 the position recomputed from the
+  DDA's `t` sits a hair outside the brick's face along any axis the ray barely moves
+  on, the reject walked nothing, and a grazing ray passed through the desert floor
+  wherever it crossed a brick edge. It clamps again, with the reason written at
+  `march_brick` ([gotchas.md](gotchas.md) "A grazing far-field ray can walk straight
+  through a floor at a brick edge"); the DDA only ever hands it bricks the ray enters,
+  so the clamp moves the cell by that hair and no more. Its companion is
+  `entry_normal`, which walks back cell by cell rather than in half-cell hops, since a
+  hop lands diagonal to the last solid cell and guessed a sideways face on a flat
+  floor (same file, "A faceless hit's normal").
 - The blit binds its own group 0, and the sky, grid and gizmo after it expect the
   frame's. A pass keeps whatever was set last, so the sky drew with the far field's
   bind group and the whole command buffer failed validation.

@@ -11,6 +11,17 @@ first consumer of the packaging API (`Voxler.create`), which makes it the check 
 API works from outside this repository rather than only inside it
 ([plan-packaging.md](../agent_docs/plan-packaging.md)).
 
+`sweden-2026.html` is the 2026 Riksdag election as a map, and the second consumer of the API:
+its world is two WGSL files beside it in `sweden/` (the program, and the data table
+`sweden-election.ts` beside them generates from Valmyndigheten's count and the municipality
+boundaries) plus `results.json` for the legend, fetched by the page and handed to
+`Voxler.create` as one world. The party blocks, the `map` sky and the water's `fluid`
+it names are the engine's. A click names the municipality through the API's `onClick`
+and `pick()` and opens its numbers; F2 (or I) opens a camera and last-click readout for
+pointing at something that looks wrong. `deno task sweden` refreshes the data, and
+`src/worlds/sweden_test.ts` holds the table's layout and compiles the world against the
+engine.
+
 `CNAME` is what makes all of that answer at `https://voxler.dev/`: GitHub Pages reads it
 at the site root to know which domain this deploy owns. The workflow copies it there with
 the rest of `docs/`, and `src/release_test.ts` holds it against the host in `SITE`

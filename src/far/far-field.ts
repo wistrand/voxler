@@ -202,7 +202,8 @@ export class FarField {
   // pays nothing, and a mark is a click, not a frame.
   private marchModule: GPUShaderModule | null = null;
   private buildModule: GPUShaderModule | null = null;
-  private probes: Promise<void> | null = null;
+  private rayProbe: Promise<void> | null = null;
+  private worldProbe: Promise<void> | null = null;
   private probeLayout: GPUBindGroupLayout | null = null;
   private probeMarch: GPUComputePipeline | null = null;
   private probeWorldPipeline: GPUComputePipeline | null = null;
@@ -554,18 +555,31 @@ export class FarField {
   // Both run outside the frame: a mark is a click, so a submit of their own and a map
   // that is awaited are fine here, and neither touches anything the frame loop holds.
 
-  // Compiles the probe pipelines, once, and hands back the same promise after that.
-  // `mark` in the panel calls this when it is switched on, so the wait lands there
+  // Compiles the probe pipelines, once each, and hands back the same promise after
+  // that. Two, because they cost differently: the ray probe inlines the march again, a
+  // fraction of a second, and a host's `pick()` wants only it; the world probe inlines
+  // the world program again, seconds on a heavy world, and only a mark wants that.
+  // `mark` in the panel warms both when it is switched on, so the wait lands there
   // rather than on the click or on every startup.
   warmProbes(): Promise<void> {
-    if (this.marchModule === null || this.buildModule === null) return Promise.resolve();
-    this.probes ??= this.buildProbes(this.marchModule, this.buildModule);
-    return this.probes;
+    return Promise.all([this.warmRayProbe(), this.warmWorldProbe()]).then(() => undefined);
   }
 
-  // Neither probe pipeline is small to compile: each inlines something the frame already
-  // has (the march, the world program) a second time.
-  private async buildProbes(march: GPUShaderModule, build: GPUShaderModule): Promise<void> {
+  warmRayProbe(): Promise<void> {
+    if (this.marchModule === null) return Promise.resolve();
+    this.rayProbe ??= this.buildRayProbe(this.marchModule);
+    return this.rayProbe;
+  }
+
+  warmWorldProbe(): Promise<void> {
+    if (this.buildModule === null) return Promise.resolve();
+    this.worldProbe ??= this.buildWorldProbe(this.buildModule);
+    return this.worldProbe;
+  }
+
+  // The layout and the buffers the two probes bind, made the first time either is.
+  private probeResources(): GPUBindGroupLayout {
+    if (this.probeLayout !== null) return this.probeLayout;
     const device = this.device;
     this.probeLayout = device.createBindGroupLayout({
       label: "far probe",
@@ -584,26 +598,27 @@ export class FarField {
       layout: this.probeLayout,
       entries: [{ binding: 0, resource: { buffer: this.worldProbeBuffer } }],
     });
-    const [probeMarch, probeWorld] = await Promise.all([
-      device.createComputePipelineAsync({
-        label: "far probe",
-        layout: device.createPipelineLayout({
-          label: "far probe",
-          bindGroupLayouts: [this.layout, this.probeLayout],
-        }),
-        compute: { module: march, entryPoint: "probe_far" },
-      }),
-      device.createComputePipelineAsync({
-        label: "world probe",
-        layout: device.createPipelineLayout({
-          label: "world probe",
-          bindGroupLayouts: [this.buildLayout, this.probeLayout],
-        }),
-        compute: { module: build, entryPoint: "probe_world" },
-      }),
-    ]);
-    this.probeMarch = probeMarch;
-    this.probeWorldPipeline = probeWorld;
+    return this.probeLayout;
+  }
+
+  private async buildRayProbe(march: GPUShaderModule): Promise<void> {
+    const device = this.device;
+    const layout = this.probeResources();
+    this.probeMarch = await device.createComputePipelineAsync({
+      label: "far probe",
+      layout: device.createPipelineLayout({ label: "far probe", bindGroupLayouts: [this.layout, layout] }),
+      compute: { module: march, entryPoint: "probe_far" },
+    });
+  }
+
+  private async buildWorldProbe(build: GPUShaderModule): Promise<void> {
+    const device = this.device;
+    const layout = this.probeResources();
+    this.probeWorldPipeline = await device.createComputePipelineAsync({
+      label: "world probe",
+      layout: device.createPipelineLayout({ label: "world probe", bindGroupLayouts: [this.buildLayout, layout] }),
+      compute: { module: build, entryPoint: "probe_world" },
+    });
   }
 
   // The staging buffer is made and thrown away per probe on purpose: a map that never
@@ -654,7 +669,7 @@ export class FarField {
   // Marches one ray from zero, through the clipmap the frame is using, and reports what
   // it met. `ndc` is the clicked point in normalised device coordinates.
   async probeRay(ndcX: number, ndcY: number): Promise<Uint32Array | null> {
-    await this.warmProbes();
+    await this.warmRayProbe();
     if (this.probeMarch === null || this.bindGroup === null) return null;
     const input = new Uint32Array(PROBE_WORDS);
     new Float32Array(input.buffer)[0] = ndcX;
@@ -678,7 +693,7 @@ export class FarField {
     fine: number,
     coarse: number,
   ): Promise<Uint32Array | null> {
-    await this.warmProbes();
+    await this.warmWorldProbe();
     if (this.probeWorldPipeline === null || this.buildBindGroup === null) return null;
     const input = new Uint32Array(WORLD_PROBE_WORDS);
     const asI32 = new Int32Array(input.buffer);

@@ -338,6 +338,10 @@ equal to the reference on all 15 test chunks x 3 setups, with and without border
 ids; opaque output unchanged by translucent voxels. New test chunks: hills with
 water, water and glass, uniform water.
 
+Since 2026-09-16 two translucent ids of one `fluid` hide each other's faces the way one
+id does (`sameFluid` in `src/world/blocks.ts`), so a sea of shallow and deep water has
+no wall down its depth contours.
+
 Worker job: "chunk.mesh" (`src/mesh/job.ts`, layouts in design-formats.md "Mesh job
 and output"). Shared arena: the job reads the chunk and its six neighbors in place;
 copy path: the main thread copies those blocks into a pooled buffer that the job

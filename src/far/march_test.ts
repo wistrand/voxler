@@ -132,8 +132,8 @@ function marchBrick(
   // Step a hair past the entry so the cell is the one the ray is actually in; a
   // clamp here instead would invent a cell on a ray that only grazes the brick.
   for (let i = 0; i < 3; i++) {
-    cell[i] = Math.floor(p0[i] + d[i] * (t0 + 1e-4)) - base[i] * BRICK_CELLS;
-    if (cell[i] < 0 || cell[i] >= BRICK_CELLS) return null;
+    // Clamped into the brick, as far.wgsl does: the position lags the DDA by a hair.
+    cell[i] = Math.max(0, Math.min(BRICK_CELLS - 1, Math.floor(p0[i] + d[i] * (t0 + 1e-4)) - base[i] * BRICK_CELLS));
   }
   const t = [0, 0, 0];
   for (let i = 0; i < 3; i++) {

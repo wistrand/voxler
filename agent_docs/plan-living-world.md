@@ -543,7 +543,11 @@ like the sky and shadows, because it is built into the near pipeline's targets).
   FOG_DENSITY)`. A cap far out blooms as faintly as it is drawn, and past the fog not at
   all. Nothing else can bloom: there is no HDR to threshold in this engine and every
   emission is under 1 by construction, so the emission channel is the threshold. All six
-  glowing blocks are opaque, so the translucent pass and the birds write nothing.
+  glowing blocks are opaque, so the translucent pass writes nothing. The birds write
+  zero to it (`fs_bloom` in birds.wgsl, their pipeline built with the second target when
+  bloom is on): drawn after the near passes and writing only the frame, a bird over a
+  cap left the cap's glow under it in the source, and the composite bloomed it through
+  the bird.
 - A dual-filter blur, four half-size levels down with the 13-tap pattern and back up
   with the 9-tap tent added at each level. The radius is the level count, so it scales
   with the frame instead of being a pixel count that reads differently at every size.

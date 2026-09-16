@@ -136,10 +136,8 @@ fn sh_brick_can_hit(axes: u32, base: vec3i, p0: vec3f, dir: vec3f, t0: f32, t1: 
 // cell: a shadow ray stops at anything.
 fn sh_march_brick(brick: u32, base: vec3i, p0: vec3f, dir: vec3f, inv: vec3f, t0: f32, t_end: f32) -> bool {
   let step = vec3i(sign(dir));
-  var cell = vec3i(floor(p0 + dir * (t0 + 1e-4))) - base * SH_BRICK_CELLS;
-  if (any(cell < vec3i(0)) || any(cell >= vec3i(SH_BRICK_CELLS))) {
-    return false;
-  }
+  // Clamped into the brick, for the reason given at `march_brick` in far.wgsl.
+  var cell = clamp(vec3i(floor(p0 + dir * (t0 + 1e-4))) - base * SH_BRICK_CELLS, vec3i(0), vec3i(SH_BRICK_CELLS - 1));
   let next = vec3f(base * SH_BRICK_CELLS + cell + max(step, vec3i(0)));
   var t = (next - p0) * inv;
   let dt = abs(inv);

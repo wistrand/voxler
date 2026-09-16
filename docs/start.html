@@ -419,6 +419,31 @@ voxler.edit.fillSphere(x, y, z, r, id);</code></pre>
   the instance each time, or take the new one from <code>onReady</code>. Do not cache it.
 </p>
 
+<h3>What is under the cursor</h3>
+
+<p>
+  <code>onClick</code> fires for a pointer that went down and came up in place, with no
+  second pointer down meanwhile: a drag is a look and two fingers are a flight, and the
+  engine tells them apart so a host does not have to. <code>pick(x, y)</code> says what is
+  under a point on the view, in client coordinates: the voxel the meshes hold there, or
+  past them the cell the far field's ray march meets, which is coarser the further it is.
+</p>
+
+<pre><code>const voxler = await Voxler.create(canvas, options, {
+  onClick: (x, y) => voxler.pick(x, y).then((hit) => {
+    if (hit === null) return;              // sky
+    console.log(hit.name, hit.position);   // "stone", [x, y, z] of the voxel's min corner
+    // hit.size is 1 for a meshed voxel, the cell width for a far-field hit;
+    // hit.normal is the face the ray came in through; hit.far says which answered.
+  }),
+});</code></pre>
+
+<p>
+  The far answer is a GPU probe and resolves a frame or so later; its pipeline is built on
+  the first pick. <a href="sweden-2026.html">The election map</a> is a host of both: a click on a
+  bubble or on the ground names the municipality and opens its numbers.
+</p>
+
 <h2>Changing a world after it is running</h2>
 
 <p>

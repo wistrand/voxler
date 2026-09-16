@@ -185,43 +185,52 @@ fn cell_filled(level: u32, cell: vec3i) -> bool {
 // at, and read as an up face it is a line of bright ones on a slope drawn as risers
 // (gotchas.md "A level boundary the camera looks up at is a line of black cells").
 //
-// So find the face rather than guess it: walk back along the ray to where it entered the
-// solid and take the face it crossed there. The walk stays inside the window, because a
-// cell outside it is another part of the world through the toroidal indirection, and it
-// stops after two bricks, which is as deep as the levels can disagree. A hit with no way
-// out within that falls back to the cells around it, and a cell with nothing around it to
-// go on answers up, which is what terrain mostly is.
+// So find the face rather than guess it: walk back along the ray, cell by cell, to the
+// first cell that is air, and the face is the one that step crossed. Cell by cell and not
+// in half-cell hops: a hop can land in an air cell diagonal to the last solid one, and
+// the axis it then guesses from the diagonal is whichever the hop moved furthest along,
+// which on a flat floor seen at a grazing angle is a horizontal one. That drew every
+// level boundary across the desert as a hairline of side-lit floor. The walk stays inside
+// the window, because a cell outside it is another part of the world through the
+// toroidal indirection, and it stops after a few bricks, which is as deep as the levels
+// can disagree. A hit with no way out within that falls back to the cells around it, and
+// a cell with nothing around it to go on answers up, which is what terrain mostly is.
 fn entry_normal(level: u32, cell: vec3i, dir: vec3f, t_voxels: f32) -> vec3f {
   let cell_voxels = f32(far.level[level].info.x);
-  let extent = f32(far.level[level].info.y);
+  let extent = i32(far.level[level].info.y);
   let p0 = (far.eye.xyz + vec3f(far.level[level].offset.xyz)) / cell_voxels;
   let pos = p0 + dir * (t_voxels / cell_voxels);
-  var prev = cell;
-  for (var i = 1; i <= 32; i++) {
-    let q = pos - dir * (f32(i) * 0.5);
-    if (any(q < vec3f(0.0)) || any(q >= vec3f(extent))) {
+  // A DDA backwards along the ray from the hit, out of the solid it started in.
+  let back = -dir;
+  let inv = 1.0 / max(abs(back), vec3f(1e-8));
+  let step = vec3i(sign(back));
+  var c = cell;
+  // Distance along `back` to the next plane on each axis; an axis the ray does not move
+  // along never comes up.
+  var t_next = select(
+    (vec3f(c + max(step, vec3i(0))) - pos) * inv * sign(back + vec3f(1e-20)),
+    vec3f(1e30),
+    step == vec3i(0),
+  );
+  for (var i = 0; i < 48; i++) {
+    var axis = 0;
+    if (t_next.y < t_next.x) {
+      axis = 1;
+    }
+    if (t_next.z < t_next[axis]) {
+      axis = 2;
+    }
+    c[axis] += step[axis];
+    t_next[axis] += inv[axis];
+    if (any(c < vec3i(0)) || any(c >= vec3i(extent))) {
       break;
     }
-    let c = vec3i(floor(q));
-    if (all(c == prev)) {
-      continue;
-    }
     if (!cell_filled(level, c)) {
-      // The ray crossed from `c` into `prev`: the face is the axis it moved on, and the
-      // normal points back the way it came.
-      let d = vec3f(c - prev);
-      let a = abs(d);
+      // The step left the solid through this face; its normal is the way the step went.
       var n = vec3f(0.0);
-      if (a.x >= a.y && a.x >= a.z) {
-        n.x = sign(d.x);
-      } else if (a.y >= a.z) {
-        n.y = sign(d.y);
-      } else {
-        n.z = sign(d.z);
-      }
+      n[axis] = f32(step[axis]);
       return n;
     }
-    prev = c;
   }
   let g = vec3f(
     f32(cell_filled(level, cell - vec3i(1, 0, 0))) - f32(cell_filled(level, cell + vec3i(1, 0, 0))),
@@ -323,13 +332,16 @@ fn march_brick(
   out: ptr<function, Hit>,
 ) -> bool {
   let step = vec3i(sign(dir));
-  // A hair past the entry, so this is the cell the ray is actually in. Clamping into
-  // the brick instead would invent a cell on a ray that only grazes its corner, and
-  // the march would report a hit the ray never reaches.
-  var cell = vec3i(floor(p0 + dir * (t0 + 1e-4))) - base * BRICK_CELLS;
-  if (any(cell < vec3i(0)) || any(cell >= vec3i(BRICK_CELLS))) {
-    return false;
-  }
+  // A hair past the entry, so this is the cell the ray is actually in, clamped into the
+  // brick. The brick DDA put the ray on this brick's face at `t0`; in f32 the position
+  // recomputed from `t0` can sit a hair on either side of that face, and the hair is
+  // bigger than the 1e-4 nudge along an axis the ray barely moves on (the nudge is
+  // 1e-4 times that component, the rounding of a coordinate near 250 is 3e-5). Treating
+  // a hair outside as "not in this brick" and walking nothing let a grazing ray pass
+  // straight through the desert floor wherever it crossed a brick edge, a dashed
+  // hairline of ground never hit. The clamp can only ever move the cell by that hair,
+  // so it never invents a hit off the ray.
+  var cell = clamp(vec3i(floor(p0 + dir * (t0 + 1e-4))) - base * BRICK_CELLS, vec3i(0), vec3i(BRICK_CELLS - 1));
   let world_cell = base * BRICK_CELLS + cell;
   // Distance to the next crossing on each axis, from the ray origin.
   let next = vec3f(world_cell + max(step, vec3i(0)));

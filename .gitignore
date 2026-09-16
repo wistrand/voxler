@@ -9,3 +9,6 @@ node_modules/
 /bench/
 # Marks: what the `mark` switch posts back, local to one machine like bench results.
 /marks/
+# What sweden-election.ts fetched (election results, boundaries); the generated
+# src/worlds/sweden-data.wgsl is what is committed.
+/data/

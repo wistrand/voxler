@@ -10,7 +10,7 @@ struct Camera {
   view_proj: mat4x4f,
   inv_view_proj: mat4x4f,
   chunk: vec4i,    // camera chunk coordinate; w unused
-  offset: vec4f,   // eye position in render space, each component in [0, 32); w unused
+  offset: vec4f,   // eye position in render space, each component in [0, 32); w: the projection's y scale, 1 / tan(fovY / 2)
   viewport: vec4f, // width, height, 1 / width, 1 / height in pixels
   // x: seconds wrapped into WIND_PERIOD, for anything that is a function of the clock
   // (the wind). Wrapped, so every term it drives needs a period that divides the wrap or

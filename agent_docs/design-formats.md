@@ -322,7 +322,7 @@ offset  field          type       notes
 64      view_proj      mat4x4f    render space -> clip, reversed-Z infinite
 128     inv_view_proj  mat4x4f    clip -> render space; depth 0 unprojects to a direction
 192     chunk          vec4<i32>  camera chunk coordinate; w unused
-208     offset         vec4f      eye in render space, each in [0, 32); w unused
+208     offset         vec4f      eye in render space, each in [0, 32); w: the projection's y scale, 1 / tan(fovY / 2)
 224     viewport       vec4f      width, height, 1 / width, 1 / height (pixels)
 240     time           vec4f      x: clock, wrapped into WIND_PERIOD; y: this frame's dt; zw unused
 ```
